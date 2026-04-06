@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-04-06
+- Refreshed direct package dependencies and lockfile to current compatible releases, including `openai`, `@anthropic-ai/sdk`, `@google/genai`, `vitest`, and lint/build tooling.
+- Added full xAI Grok Imagine image support for `grok-imagine-image` and `grok-imagine-image-pro`, including JSON-based image editing via `/images/edits`.
+- Added xAI image option mapping for aspect ratio, explicit `resolution` tiers (`1k` / `2k`), URL vs. base64 responses, and edit-cost accounting for billable input plus output images.
+
 ## 2026-03-18
 - Added first-class OpenAI support for `gpt-5.4-mini` and `gpt-5.4-nano`, including current dated aliases, pricing, and capability metadata.
 - Refreshed existing `gpt-5.4` / `gpt-5.4-pro` snapshot aliases and pricing to match current OpenAI docs.

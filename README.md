@@ -38,7 +38,7 @@ See the [demo README](demo/README.md) for detailed information about each demo.
 - OpenAI: Added GPT-5.2 (base + chat-latest + pro) and refreshed GPT-5.1/GPT-5/Codex pricing
 - Anthropic: Claude 4.5 (Sonnet/Haiku, incl. 1M context) and Claude Opus 4.1
 - Google: Gemini 3 (Pro/Flash/Ultra) and refreshed Gemini 2.5 pricing incl. image/TTS/native-audio
-- xAI: Grok 4.1 Fast and Grok 4 Fast with tiered pricing; updated Grok 4/3/mini variants
+- xAI: Grok 4.1 Fast and Grok 4 Fast with tiered pricing; updated Grok 4/3/mini variants plus Grok Imagine image generation/editing support (`grok-imagine-image`, `grok-imagine-image-pro`)
 
 *Codex-Max pricing reflects current published rates and may change if OpenAI updates pricing.
 

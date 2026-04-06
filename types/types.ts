@@ -828,6 +828,7 @@ export interface ImageGenerationOpts {
 
     /** Size/aspect ratio of the generated image */
     size?:
+        | 'auto'
         | 'square'
         | 'landscape'
         | 'portrait'
@@ -852,9 +853,16 @@ export interface ImageGenerationOpts {
         | '5:4'
         | '8:1'
         | '9:16'
+        | '9:19.5'
+        | '9:20'
         | '16:9'
+        | '19.5:9'
+        | '20:9'
         | '21:9'
         | `${number}x${number}`;
+
+    /** Output resolution for providers that support explicit image tiers (for example xAI) */
+    resolution?: '1k' | '2k';
 
     /** Quality of the generated image */
     quality?: 'standard' | 'hd' | 'low' | 'medium' | 'high';
