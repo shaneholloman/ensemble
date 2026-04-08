@@ -75,6 +75,7 @@ const MODEL_PROVIDER_MAP: Record<string, ModelProvider> = {
     'text-': openaiProvider,
     'computer-use-preview': openaiProvider,
     'dall-e': openaiProvider, // Image generation models
+    'chatgpt-image': openaiProvider, // ChatGPT image generation models
     'gpt-image': openaiProvider, // GPT-Image-1 model
     'tts-': openaiProvider, // TTS models
     'codex-': openaiProvider, // Coding models

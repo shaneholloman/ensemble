@@ -765,8 +765,8 @@ export class OpenAIProvider extends BaseModelProvider {
         // Normalize quality values: treat 'auto' as 'medium'
         const q = quality === 'auto' ? 'medium' : quality;
 
-        // GPT Image 1.5 pricing (OpenAI API Pricing)
-        if (model === 'gpt-image-1.5') {
+        // ChatGPT Image Latest and GPT Image 1.5 share the same published pricing.
+        if (model === 'chatgpt-image-latest' || model === 'gpt-image-1.5') {
             if (q === 'high') return isLarge ? 0.2 : 0.133;
             if (q === 'low') return isLarge ? 0.013 : 0.009;
             // medium/default

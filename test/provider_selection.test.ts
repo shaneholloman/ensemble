@@ -33,6 +33,10 @@ describe('getModelProvider', () => {
         expect(getModelProvider('gpt-3.5-turbo')).toBe(openaiProvider);
     });
 
+    it('returns OpenAI provider for chatgpt image models', () => {
+        expect(getModelProvider('chatgpt-image-latest')).toBe(openaiProvider);
+    });
+
     it('returns Claude provider', () => {
         expect(getModelProvider('claude-3')).toBe(claudeProvider);
     });

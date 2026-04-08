@@ -2311,6 +2311,30 @@ export const MODEL_REGISTRY: ModelEntry[] = [
             "OpenAI's GPT Image 1.5 model for text-to-image generation and editing. Pricing varies by quality (low/medium/high) and size (1024x1024, 1024x1536, 1536x1024).",
     },
     {
+        id: 'chatgpt-image-latest',
+        provider: 'openai',
+        cost: {
+            // OpenAI's current ChatGPT image pricing matches GPT Image 1.5 across image sizes.
+            per_image: 0.034,
+            input_per_million: {
+                text: 5.0,
+                image: 8.0,
+            },
+            output_per_million: {
+                text: 10.0,
+                image: 32.0,
+            },
+        },
+        features: {
+            input_modality: ['text', 'image'],
+            output_modality: ['image', 'text'],
+            streaming: false,
+        },
+        class: 'image_generation',
+        description:
+            "OpenAI's latest ChatGPT image generation model for text-to-image generation and editing. Pricing varies by quality (low/medium/high) and size (1024x1024, 1024x1536, 1536x1024).",
+    },
+    {
         id: 'gpt-image-1',
         provider: 'openai',
         cost: {
