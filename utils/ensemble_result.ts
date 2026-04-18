@@ -4,6 +4,7 @@ import {
     FileEvent,
     ToolEvent,
     ErrorEvent,
+    OperationStatusEvent,
     CostUpdateEvent,
     ResponseOutputEvent,
     AgentEvent,
@@ -50,6 +51,16 @@ export interface EnsembleResult {
     /** Any errors that occurred */
     error?: string;
 
+    /** Authoritative outer request status when present */
+    requestStatus?: 'started' | 'retrying' | 'failed' | 'completed';
+
+    /** Final failure details when the request terminates unsuccessfully */
+    failure?: {
+        error: string;
+        reason?: string;
+        recoverable?: boolean;
+    };
+
     /** All response output messages */
     responseOutputs?: ResponseInputItem[];
 
@@ -69,12 +80,19 @@ export interface EnsembleResult {
     messageIds: Set<string>;
 }
 
+export interface EnsembleResultOptions {
+    failFast?: boolean;
+}
+
 /**
  * Converts an ensemble stream into a single result object
  * @param stream - The async generator stream from ensembleRequest or similar
  * @returns Promise resolving to the aggregated result
  */
-export async function ensembleResult(stream: AsyncGenerator<ProviderStreamEvent>): Promise<EnsembleResult> {
+export async function ensembleResult(
+    stream: AsyncGenerator<ProviderStreamEvent>,
+    options: EnsembleResultOptions = {}
+): Promise<EnsembleResult> {
     const result: EnsembleResult = {
         message: '',
         completed: false,
@@ -88,6 +106,15 @@ export async function ensembleResult(stream: AsyncGenerator<ProviderStreamEvent>
     const toolCalls = new Map<string, ToolCallResult>();
     const files: EnsembleResult['files'] = [];
     const responseOutputs: ResponseInputItem[] = [];
+    let sawTerminalRequestStatus = false;
+    let sawStreamEnd = false;
+    let shouldStopReading = false;
+
+    const applyFailure = (failure: NonNullable<EnsembleResult['failure']>) => {
+        result.failure = failure;
+        result.error = failure.error;
+        result.completed = false;
+    };
 
     try {
         for await (const event of stream) {
@@ -197,7 +224,40 @@ export async function ensembleResult(stream: AsyncGenerator<ProviderStreamEvent>
 
                 case 'error': {
                     const errorEvent = event as ErrorEvent;
-                    result.error = errorEvent.error;
+                    applyFailure({
+                        error: errorEvent.error,
+                        recoverable: errorEvent.recoverable,
+                    });
+                    break;
+                }
+
+                case 'operation_status': {
+                    const statusEvent = event as OperationStatusEvent;
+                    if (statusEvent.operation !== 'request') {
+                        break;
+                    }
+
+                    result.requestStatus = statusEvent.status;
+
+                    if (statusEvent.status === 'failed' && statusEvent.terminal) {
+                        sawTerminalRequestStatus = true;
+                        applyFailure({
+                            error: statusEvent.error || result.error || 'Request failed',
+                            reason: statusEvent.reason,
+                            recoverable: statusEvent.recoverable,
+                        });
+
+                        if (options.failFast) {
+                            shouldStopReading = true;
+                        }
+                    }
+
+                    if (statusEvent.status === 'completed' && statusEvent.terminal) {
+                        sawTerminalRequestStatus = true;
+                        result.failure = undefined;
+                        result.error = undefined;
+                        result.completed = true;
+                    }
                     break;
                 }
 
@@ -216,9 +276,13 @@ export async function ensembleResult(stream: AsyncGenerator<ProviderStreamEvent>
                 }
 
                 case 'stream_end': {
-                    result.completed = true;
+                    sawStreamEnd = true;
                     break;
                 }
+            }
+
+            if (shouldStopReading) {
+                break;
             }
         }
 
@@ -249,8 +313,8 @@ export async function ensembleResult(stream: AsyncGenerator<ProviderStreamEvent>
             result.responseOutputs = responseOutputs;
         }
 
-        // Mark as completed if we finished the loop without errors
-        if (!result.error && !result.completed) {
+        // Fall back to stream completion only when no authoritative terminal request status exists.
+        if (!sawTerminalRequestStatus && sawStreamEnd && !result.error) {
             result.completed = true;
         }
     } catch (error) {

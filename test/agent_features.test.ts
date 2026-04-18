@@ -16,6 +16,108 @@ describe('Agent Features', () => {
         vi.clearAllMocks();
     });
 
+    describe('modelSettings.json_schema', () => {
+        it('preserves the authoritative structured-output configuration', () => {
+            const agent = new Agent({
+                name: 'structured_agent',
+                modelSettings: {
+                    json_schema: {
+                        name: 'analysis',
+                        type: 'json_schema',
+                        strict: true,
+                        schema: {
+                            type: 'object',
+                            properties: {
+                                answer: { type: 'string' },
+                            },
+                            required: ['answer'],
+                            additionalProperties: false,
+                        },
+                    },
+                },
+            });
+
+            expect(agent.modelSettings?.json_schema).toEqual({
+                name: 'analysis',
+                type: 'json_schema',
+                strict: true,
+                schema: {
+                    type: 'object',
+                    properties: {
+                        answer: { type: 'string' },
+                    },
+                    required: ['answer'],
+                    additionalProperties: false,
+                },
+            });
+        });
+
+        it('maps deprecated jsonSchema onto modelSettings.json_schema', () => {
+            const schema = {
+                name: 'analysis',
+                type: 'json_schema' as const,
+                strict: true,
+                schema: {
+                    type: 'object',
+                    properties: {
+                        answer: { type: 'string' },
+                    },
+                    required: ['answer'],
+                    additionalProperties: false,
+                },
+            };
+
+            const agent = new Agent({
+                name: 'compat_structured_agent',
+                jsonSchema: schema,
+            });
+
+            expect(agent.jsonSchema).toEqual(schema);
+            expect(agent.modelSettings?.json_schema).toEqual(schema);
+        });
+
+        it('preserves deprecated jsonSchema compatibility for plain agent definitions', async () => {
+            const { getModelProvider } = await import('../model_providers/model_provider.js');
+            const schema = {
+                name: 'plain_analysis',
+                type: 'json_schema' as const,
+                strict: true,
+                schema: {
+                    type: 'object',
+                    properties: {
+                        answer: { type: 'string' },
+                    },
+                    required: ['answer'],
+                    additionalProperties: false,
+                },
+            };
+            const mockProvider = {
+                createResponseStream: vi.fn().mockImplementation(async function* (_messages, _model, agent) {
+                    expect(agent.modelSettings?.json_schema).toEqual(schema);
+                    yield {
+                        type: 'message_complete',
+                        content: '{"answer":"ok"}',
+                    };
+                }),
+            };
+            (getModelProvider as any).mockReturnValue(mockProvider);
+
+            const events: ProviderStreamEvent[] = [];
+            for await (const event of ensembleRequest(
+                [{ type: 'message', role: 'user', content: 'Respond with JSON' }],
+                {
+                    model: 'test-model',
+                    jsonSchema: schema,
+                } as AgentDefinition
+            )) {
+                events.push(event);
+            }
+
+            expect(mockProvider.createResponseStream).toHaveBeenCalledTimes(1);
+            expect(events.some(event => event.type === 'message_complete')).toBe(true);
+        });
+    });
+
     describe('historyThread', () => {
         it('should use historyThread if provided', async () => {
             const { getModelProvider } = await import('../model_providers/model_provider.js');

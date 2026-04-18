@@ -27,6 +27,7 @@ import { appendMessageWithImage, normalizeImageDataUrl, resizeAndSplitForOpenAI 
 import { DeltaBuffer, bufferDelta, flushBufferedDeltas } from '../utils/delta_buffer.js';
 import { createCitationTracker, formatCitation, generateFootnotes } from '../utils/citation_tracker.js';
 import { hasEventHandler } from '../utils/event_controller.js';
+import { createProviderErrorEvent } from '../utils/failure_detection.js';
 import { findModel } from '../data/model_data.js';
 
 // Extended types for Perplexity/OpenRouter response formats
@@ -775,7 +776,9 @@ export class OpenAIChat extends BaseModelProvider {
             await waitWhilePaused(100, agent.abortSignal);
 
             // --- Process Stream ---
-            const stream = await this.client.chat.completions.create(requestParams);
+            const stream = await this.client.chat.completions.create(requestParams, {
+                signal: agent.abortSignal,
+            });
             let aggregatedContent = '';
             let aggregatedThinking = '';
             const messageId = uuidv4();
@@ -1080,8 +1083,11 @@ export class OpenAIChat extends BaseModelProvider {
                     const completedToolCalls: ToolCall[] = Array.from(partialToolCallsByIndex.values()).filter(
                         call => call.id && call.function.name
                     );
+                    const validatedToolCalls: ToolCall[] = [];
+                    const malformedToolCallNames: string[] = [];
                     if (completedToolCalls.length > 0) {
                         for (const completedToolCall of completedToolCalls) {
+                            let toolCallMalformed = false;
                             // Validate and fix JSON arguments before yielding
                             if (completedToolCall.function.arguments) {
                                 try {
@@ -1104,22 +1110,41 @@ export class OpenAIChat extends BaseModelProvider {
                                             const parsed = JSON.parse(matches[0]);
                                             completedToolCall.function.arguments = JSON.stringify(parsed);
                                         } catch {
-                                            // If all else fails, use empty object
-                                            completedToolCall.function.arguments = '{}';
-                                            console.error(
-                                                `(${this.provider}) Could not parse arguments, using empty object`
-                                            );
+                                            toolCallMalformed = true;
+                                            console.error(`(${this.provider}) Could not parse tool arguments.`);
                                         }
                                     } else {
-                                        completedToolCall.function.arguments = '{}';
+                                        toolCallMalformed = true;
                                     }
                                 }
                             }
 
+                            if (toolCallMalformed) {
+                                malformedToolCallNames.push(completedToolCall.function.name);
+                                continue;
+                            }
+
+                            validatedToolCalls.push(completedToolCall);
+                        }
+
+                        if (malformedToolCallNames.length > 0) {
+                            const malformedToolCallError =
+                                malformedToolCallNames.length === 1
+                                    ? `Error (${this.provider}): Model emitted malformed tool arguments for ${malformedToolCallNames[0]}.`
+                                    : `Error (${this.provider}): Model emitted malformed tool arguments for ${malformedToolCallNames.join(', ')}.`;
+                            log_llm_error(requestId, malformedToolCallError);
                             yield {
-                                type: 'tool_start',
-                                tool_call: completedToolCall,
+                                type: 'error',
+                                error: malformedToolCallError,
+                                recoverable: false,
                             };
+                        } else {
+                            for (const completedToolCall of validatedToolCalls) {
+                                yield {
+                                    type: 'tool_start',
+                                    tool_call: completedToolCall,
+                                };
+                            }
                         }
                     } else {
                         log_llm_error(
@@ -1132,6 +1157,7 @@ export class OpenAIChat extends BaseModelProvider {
                         yield {
                             type: 'error',
                             error: `Error (${this.provider}): Model indicated tool calls, but none were parsed correctly.`,
+                            recoverable: false,
                         };
                     }
                 } else if (finishReason === 'length') {
@@ -1146,6 +1172,7 @@ export class OpenAIChat extends BaseModelProvider {
                     yield {
                         type: 'error',
                         error: `Error (${this.provider}): Response truncated (max_tokens). Partial: ${cleanedPartialContent.substring(0, 100)}...`,
+                        recoverable: false,
                     };
                 } else if (finishReason) {
                     const cleanedReasonContent = aggregatedContent.replaceAll(
@@ -1159,6 +1186,7 @@ export class OpenAIChat extends BaseModelProvider {
                     yield {
                         type: 'error',
                         error: `Error (${this.provider}): Response stopped due to: ${finishReason}. Content: ${cleanedReasonContent.substring(0, 100)}...`,
+                        recoverable: false,
                     };
                 } else {
                     // Handle stream ending without a finish reason
@@ -1192,6 +1220,7 @@ export class OpenAIChat extends BaseModelProvider {
                         yield {
                             type: 'error',
                             error: `Error (${this.provider}): Stream ended unexpectedly during native tool call generation.`,
+                            recoverable: false,
                         };
                     } else {
                         // ... (unchanged empty stream error handling) ...
@@ -1202,22 +1231,24 @@ export class OpenAIChat extends BaseModelProvider {
                         yield {
                             type: 'error',
                             error: `Error (${this.provider}): Stream finished unexpectedly empty.`,
+                            recoverable: false,
                         };
                     }
                 }
             } catch (streamError) {
                 log_llm_error(requestId, streamError);
                 console.error(`(${this.provider}) Error processing chat completions stream:`, streamError);
-                yield {
-                    type: 'error',
-                    error:
-                        `Stream processing error (${this.provider} ${model}): ` +
-                        (streamError instanceof OpenAI.APIError || streamError instanceof APIError
-                            ? `${streamError.status} ${streamError.name} ${streamError.message} ${JSON.stringify(streamError.error)}`
-                            : streamError instanceof Error
-                              ? streamError.stack
-                              : Object.getPrototypeOf(streamError) + ' ' + String(streamError)),
-                };
+                yield createProviderErrorEvent(streamError, {
+                    prefix: `Stream processing error (${this.provider} ${model}): `,
+                    request_id: requestId,
+                    reason: 'request_stream_failed',
+                    details:
+                        streamError instanceof OpenAI.APIError || streamError instanceof APIError
+                            ? streamError.error
+                            : undefined,
+                    retryableErrors: agent.retryOptions?.additionalRetryableErrors,
+                    retryableStatusCodes: agent.retryOptions?.additionalRetryableStatusCodes,
+                });
             } finally {
                 partialToolCallsByIndex.clear();
 
@@ -1227,16 +1258,14 @@ export class OpenAIChat extends BaseModelProvider {
         } catch (error) {
             log_llm_error(requestId, error);
             console.error(`Error running ${this.provider} chat completions stream:`, error);
-            yield {
-                type: 'error',
-                error:
-                    `API Error (${this.provider} - ${model}): ` +
-                    (error instanceof OpenAI.APIError || error instanceof APIError
-                        ? `${error.status} ${error.name} ${error.message}`
-                        : error instanceof Error
-                          ? error.stack
-                          : Object.getPrototypeOf(error) + ' ' + String(error)),
-            };
+            yield createProviderErrorEvent(error, {
+                prefix: `API Error (${this.provider} - ${model}): `,
+                request_id: requestId,
+                reason: 'request_setup_failed',
+                details: error instanceof OpenAI.APIError || error instanceof APIError ? error.error : undefined,
+                retryableErrors: agent.retryOptions?.additionalRetryableErrors,
+                retryableStatusCodes: agent.retryOptions?.additionalRetryableStatusCodes,
+            });
         }
     }
 }

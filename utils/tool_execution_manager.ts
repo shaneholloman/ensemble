@@ -121,10 +121,27 @@ export async function executeToolWithLifecycle(
     // Register with tracker
     const runningTool = runningToolTracker.addRunningTool(fnId, toolName, agent.agent_id || 'unknown', argsString);
 
-    // Use the signal from the tracker if not provided
-    const abortSignal = signal || runningTool.abortController?.signal;
+    const trackerAbortController = runningTool.abortController;
+    const abortSignal = trackerAbortController?.signal;
+    const propagateAbort = () => {
+        if (!trackerAbortController || trackerAbortController.signal.aborted) {
+            return;
+        }
+
+        trackerAbortController.abort(signal?.reason ?? new Error('Operation was aborted'));
+    };
+
+    if (signal?.aborted) {
+        propagateAbort();
+    } else if (signal) {
+        signal.addEventListener('abort', propagateAbort, { once: true });
+    }
 
     try {
+        if (abortSignal?.aborted) {
+            throw abortSignal.reason ?? new Error('Operation was aborted');
+        }
+
         // Inject agent specific parameters
         if (tool.injectAgentId) {
             args.unshift(agent.agent_id || 'ensemble');
@@ -148,13 +165,22 @@ export async function executeToolWithLifecycle(
         const errorString = convertResultToString(error);
         await runningToolTracker.failRunningTool(fnId, errorString, agent);
         throw error;
+    } finally {
+        if (signal) {
+            signal.removeEventListener('abort', propagateAbort);
+        }
     }
 }
 
 /**
  * Handle tool call with timeout and sequential execution support
  */
-export async function handleToolCall(toolCall: ToolCall, tool: ToolFunction, agent: AgentDefinition): Promise<string> {
+export async function handleToolCall(
+    toolCall: ToolCall,
+    tool: ToolFunction,
+    agent: AgentDefinition,
+    signal?: AbortSignal
+): Promise<string> {
     const fnId = toolCall.id || uuidv4();
     const toolName = toolCall.function.name;
 
@@ -162,11 +188,15 @@ export async function handleToolCall(toolCall: ToolCall, tool: ToolFunction, age
     const executeFunction = async (): Promise<string> => {
         // Special handling for wait_for_running_tool
         if (toolName === 'wait_for_running_tool') {
-            return executeToolWithLifecycle(toolCall, tool, agent);
+            return executeToolWithLifecycle(toolCall, tool, agent, signal);
+        }
+
+        if (!tool.injectAbortSignal) {
+            return executeToolWithLifecycle(toolCall, tool, agent, signal);
         }
 
         return Promise.race([
-            executeToolWithLifecycle(toolCall, tool, agent),
+            executeToolWithLifecycle(toolCall, tool, agent, signal),
             new Promise<string>((_, reject) => {
                 const runningTool = runningToolTracker.getRunningTool(fnId);
                 if (runningTool?.abortController?.signal) {

@@ -139,7 +139,7 @@ export class Agent implements AgentDefinition {
     verifier?: AgentDefinition;
     maxVerificationAttempts?: number;
     args?: any;
-    jsonSchema?: ResponseJSONSchema; // JSON schema for structured output
+    jsonSchema?: ResponseJSONSchema; // Deprecated compatibility alias for modelSettings.json_schema
     historyThread?: ResponseInput | undefined;
     cwd?: string; // Working directory for the agent (used by model providers that need a real shell)
     modelScores?: Record<string, number>; // Model-specific scores for weighted selection (0-100)
@@ -186,7 +186,10 @@ export class Agent implements AgentDefinition {
         this.modelClass = definition.modelClass;
         this.jsonSchema = definition.jsonSchema;
         this.params = definition.params;
-        this.modelSettings = definition.modelSettings || {};
+        this.modelSettings = definition.modelSettings ? { ...definition.modelSettings } : {};
+        if (this.jsonSchema && !this.modelSettings.json_schema) {
+            this.modelSettings.json_schema = this.jsonSchema;
+        }
         this.maxToolCalls = definition.maxToolCalls ?? 200; // Default to 200 if not specified
         this.maxToolCallRoundsPerTurn = definition.maxToolCallRoundsPerTurn; // No default, undefined means no limit
         this.maxVerificationAttempts = definition.maxVerificationAttempts ?? 2;
@@ -213,12 +216,6 @@ export class Agent implements AgentDefinition {
         this.onThinking = definition.onThinking;
         this.onResponse = definition.onResponse;
         this.onToolEvent = definition.onToolEvent;
-
-        // Configure JSON formatting if schema is provided
-        if (this.jsonSchema) {
-            if (!this.modelSettings) this.modelSettings = {};
-            this.modelSettings.json_schema = this.jsonSchema;
-        }
 
         if (definition.workers) {
             this.workers = definition.workers.map((createAgentFn: WorkerFunction): WorkerFunction => {

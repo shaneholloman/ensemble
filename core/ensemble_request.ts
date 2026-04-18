@@ -1,5 +1,5 @@
 /**
- * Unified request implementation that combines standard and enhanced features
+ * Unified request implementation that combines standard and enhanced features.
  */
 
 import { randomUUID } from 'crypto';
@@ -29,10 +29,22 @@ import {
     convertToFunctionCall,
     convertToFunctionCallOutput,
 } from '../utils/message_converter.js';
-import { truncateLargeValues } from '../utils/truncate_utils.js';
+import {
+    createOperationGuard,
+    FailureClassification,
+    normalizeFailure,
+    RequestLifecycleController,
+    selectMoreSevereFailure,
+    streamWithAbortAndTimeout,
+    toErrorEvent,
+} from '../utils/failure_detection.js';
+import { validateJsonResponseContent } from '../utils/json_schema.js';
+import { runningToolTracker } from '../utils/running_tool_tracker.js';
+import { calculateDelay } from '../utils/retry_handler.js';
 
-const MAX_ERROR_ATTEMPTS = 5;
+const DEFAULT_MAX_ERROR_RETRIES = 4;
 const DEFAULT_TERMINAL_TOOL_NAMES = new Set(['task_complete', 'task_fatal_error']);
+const TOOL_FAILURE_FINALIZATION_TIMEOUT_MS = 50;
 
 const getTerminalToolNames = (agent: AgentDefinition): Set<string> => {
     const toolNames = new Set(DEFAULT_TERMINAL_TOOL_NAMES);
@@ -44,29 +56,141 @@ const getTerminalToolNames = (agent: AgentDefinition): Set<string> => {
     return toolNames;
 };
 
+const hasTerminalTextContent = (content: unknown, expectsStructuredOutput: boolean): content is string => {
+    if (typeof content !== 'string') {
+        return false;
+    }
+
+    return expectsStructuredOutput ? content.trim().length > 0 : content.length > 0;
+};
+
+const getMaxErrorRetries = (agent: AgentDefinition): number => {
+    const configuredMaxRetries = agent.retryOptions?.maxRetries;
+    if (typeof configuredMaxRetries !== 'number' || Number.isNaN(configuredMaxRetries)) {
+        return DEFAULT_MAX_ERROR_RETRIES;
+    }
+
+    return Math.max(0, Math.floor(configuredMaxRetries));
+};
+
+const waitForRetryDelay = async (delayMs: number, abortSignal?: AbortSignal): Promise<void> => {
+    if (delayMs <= 0) {
+        return;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+        if (abortSignal?.aborted) {
+            reject(abortSignal.reason ?? new Error('Retry wait aborted'));
+            return;
+        }
+
+        const timeoutId = setTimeout(() => {
+            if (abortSignal && abortListener) {
+                abortSignal.removeEventListener('abort', abortListener);
+            }
+            resolve();
+        }, delayMs);
+
+        const abortListener = abortSignal
+            ? () => {
+                  clearTimeout(timeoutId);
+                  abortSignal.removeEventListener('abort', abortListener);
+                  reject(abortSignal.reason ?? new Error('Retry wait aborted'));
+              }
+            : undefined;
+
+        if (abortSignal && abortListener) {
+            abortSignal.addEventListener('abort', abortListener, { once: true });
+        }
+    });
+};
+
+const getOuterRequestTimeoutMs = (agent: AgentDefinition): number | undefined => {
+    const timeoutMs = agent.modelSettings?.timeout_ms;
+    if (typeof timeoutMs !== 'number' || Number.isNaN(timeoutMs) || timeoutMs <= 0) {
+        return undefined;
+    }
+
+    return Math.floor(timeoutMs);
+};
+
+const getRemainingRequestTimeoutMs = (
+    requestTimeoutMs?: number,
+    requestStartedAt?: number
+): number | undefined => {
+    if (requestTimeoutMs === undefined || requestStartedAt === undefined) {
+        return undefined;
+    }
+
+    return Math.max(0, requestTimeoutMs - (Date.now() - requestStartedAt));
+};
+
+const createRequestTimeoutError = (model: string, timeoutMs: number) => {
+    const error = new Error(`Request generation for ${model} timed out after ${timeoutMs}ms`) as Error & {
+        code?: string;
+        recoverable?: boolean;
+    };
+    error.code = 'ETIMEDOUT';
+    error.recoverable = false;
+    return error;
+};
+
+interface TrackedToolExecution {
+    toolCall: ToolCall;
+    promise: Promise<ToolCallResult>;
+    settled: boolean;
+    result?: ToolCallResult;
+}
+
+interface RoundExecutionResult {
+    requestId: string;
+    messages: string[];
+    errors: string[];
+    toolCallsStarted: number;
+    hasFollowupToolCalls: boolean;
+    emittedTerminalOutput: boolean;
+    terminalToolSucceeded: boolean;
+    failure?: FailureClassification;
+    requestDuration?: number;
+    durationWithTools?: number;
+    requestCost?: number;
+    agentDoneEvent?: ProviderStreamEvent;
+    agentDoneAgent?: AgentDefinition;
+}
+
+const getFailureRetryOverrides = (agent: AgentDefinition) => ({
+    retryableErrors: agent.retryOptions?.additionalRetryableErrors,
+    retryableStatusCodes: agent.retryOptions?.additionalRetryableStatusCodes,
+});
+
 // Set the ensemble request function in verification and image-to-text modules to avoid circular dependency
 setEnsembleRequestFunction(ensembleRequest);
 setImageToTextFunction(ensembleRequest);
 
-/**
- * Unified request function that handles both standard and enhanced modes
- */
 export async function* ensembleRequest(
     messages: ResponseInput,
     agent: AgentDefinition = {}
 ): AsyncGenerator<ProviderStreamEvent> {
-    // Use agent's historyThread if available, otherwise use provided messages
+    if (agent.jsonSchema && !agent.modelSettings?.json_schema) {
+        agent = {
+            ...agent,
+            modelSettings: {
+                ...agent.modelSettings,
+                json_schema: agent.jsonSchema,
+            },
+        };
+    }
+
     const conversationHistory = agent?.historyThread || messages;
 
     if (agent.instructions) {
-        // Check if ANY system message in the conversation history contains these exact instructions
         const alreadyHasInstructions = conversationHistory.some(msg => {
             return (
                 msg.type === 'message' &&
                 msg.role === 'system' &&
                 'content' in msg &&
                 typeof msg.content === 'string' &&
-                msg.content.trim() === agent.instructions.trim()
+                msg.content.trim() === agent.instructions!.trim()
             );
         });
 
@@ -83,237 +207,284 @@ export async function* ensembleRequest(
                 message: instructionsMessage,
                 request_id: randomUUID(),
             };
-            agent.instructions = undefined; // Clear instructions after adding to history
+            agent.instructions = undefined;
         }
     }
 
-    // Use message history manager with automatic compaction
     const history = new MessageHistory(conversationHistory, {
         compactToolCalls: true,
         preserveSystemMessages: true,
-        compactionThreshold: 0.7, // Compact when reaching 70% of context
+        compactionThreshold: 0.7,
     });
 
     const trace = createTraceContext(agent, 'chat');
+    const lifecycle = new RequestLifecycleController();
+    const maxToolCalls = agent?.maxToolCalls ?? 200;
+    const maxRounds = agent?.maxToolCallRoundsPerTurn ?? Infinity;
+    const maxErrorRetries = getMaxErrorRetries(agent);
+    const maxErrorAttempts = maxErrorRetries + 1;
+    const outerRequestTimeoutMs = getOuterRequestTimeoutMs(agent);
+    const outerRequestStartedAt = outerRequestTimeoutMs !== undefined ? Date.now() : undefined;
+    const modelHistory: string[] = [];
+    let lastModelUsed: string | undefined;
     let totalToolCalls = 0;
     let toolCallRounds = 0;
     let errorRounds = 0;
+    let lastMessageContent = '';
     let turnStatus: 'completed' | 'error' = 'completed';
     let turnEndReason = 'completed';
     let turnError: string | undefined;
-    const maxToolCalls = agent?.maxToolCalls ?? 200;
-    const maxRounds = agent?.maxToolCallRoundsPerTurn ?? Infinity;
-    let hasToolCalls = false;
-    let hasError = false;
-    let lastMessageContent = '';
-    const modelHistory: string[] = [];
+    let terminalFailure: FailureClassification | undefined;
+    let terminalFailureEventEmitted = false;
+    let finalRound: { round: RoundExecutionResult; model: string } | undefined;
 
     await trace.emitTurnStart({
         input_messages: conversationHistory,
     });
 
     try {
-        // Always execute at least one round to get initial response
-        do {
-            hasToolCalls = false;
-            hasError = false;
-            let terminalToolSucceededThisRound = false;
-            let currentRoundRequestId: string | undefined;
-            const currentRoundMessages: string[] = [];
-            const currentRoundErrors: string[] = [];
-            let currentRoundToolCalls = 0;
-            let currentRoundRequestDuration: number | undefined;
-            let currentRoundDurationWithTools: number | undefined;
-            let currentRoundRequestCost: number | undefined;
-            const terminalToolNames = getTerminalToolNames(agent);
+        const emitRoundAgentDone = async function* (
+            round: RoundExecutionResult,
+            model: string
+        ): AsyncGenerator<ProviderStreamEvent> {
+            if (!round.agentDoneEvent) {
+                return;
+            }
 
-            const model = await getModelFromAgent(
-                agent,
-                'reasoning_mini',
-                modelHistory // Change models if using classes
-            );
+            yield round.agentDoneEvent;
+            await emitEvent(round.agentDoneEvent, round.agentDoneAgent ?? agent, model);
+        };
+
+        while (!terminalFailure) {
+            const model = await getModelFromAgent(agent, 'reasoning_mini', modelHistory);
+            const roundRequestId = randomUUID();
+            const startedStatusEvent = lifecycle.begin(roundRequestId);
+
             modelHistory.push(model);
+            lastModelUsed = model;
 
-            // Execute one round
-            const stream = executeRound(model, agent, history, totalToolCalls, maxToolCalls, trace);
+            const round = yield* executeRound({
+                roundRequestId,
+                model,
+                agent,
+                history,
+                currentToolCalls: totalToolCalls,
+                maxToolCalls,
+                trace,
+                startedStatusEvent,
+                requestTimeoutMs: outerRequestTimeoutMs,
+                requestStartedAt: outerRequestStartedAt,
+            });
 
-            // Yield all events from this round
-            try {
-                for await (const event of stream) {
-                    yield event;
+            totalToolCalls += round.toolCallsStarted;
 
-                    switch (event.type) {
-                        case 'agent_start': {
-                            currentRoundRequestId = event.request_id;
-                            break;
-                        }
-
-                        case 'message_complete': {
-                            const messageEvent = event as MessageEventBase;
-                            if (messageEvent.content) {
-                                lastMessageContent = messageEvent.content;
-                                currentRoundMessages.push(messageEvent.content);
-                            }
-                            break;
-                        }
-
-                        case 'tool_start': {
-                            const toolEvent = event as ToolEvent;
-                            if (toolEvent.tool_call) {
-                                const toolName = toolEvent.tool_call.function.name;
-                                currentRoundToolCalls += 1;
-
-                                await trace.emitToolStart(event.request_id, toolEvent.tool_call.id, {
-                                    tool_name: toolName,
-                                    arguments: toolEvent.tool_call.function.arguments,
-                                    arguments_formatted: toolEvent.tool_call.function.arguments_formatted,
-                                });
-
-                                // Don't count terminal tools as regular tool calls that need another round
-                                if (!terminalToolNames.has(toolName)) {
-                                    hasToolCalls = true;
-                                }
-                            }
-                            ++totalToolCalls;
-                            break;
-                        }
-
-                        case 'tool_done': {
-                            const toolEvent = event as ToolEvent;
-                            if (toolEvent.tool_call) {
-                                const toolName = toolEvent.tool_call.function.name;
-                                if (terminalToolNames.has(toolName) && !toolEvent.result?.error) {
-                                    terminalToolSucceededThisRound = true;
-                                }
-
-                                await trace.emitToolDone(event.request_id, toolEvent.tool_call.id, {
-                                    tool_name: toolName,
-                                    call_id: toolEvent.result?.call_id,
-                                    output: toolEvent.result?.output,
-                                    error: toolEvent.result?.error,
-                                });
-                            }
-                            break;
-                        }
-
-                        case 'agent_done': {
-                            const agentDoneEvent = event as any;
-                            currentRoundRequestDuration = agentDoneEvent.request_duration;
-                            currentRoundDurationWithTools = agentDoneEvent.duration_with_tools;
-                            currentRoundRequestCost = agentDoneEvent.request_cost;
-                            break;
-                        }
-
-                        case 'error': {
-                            hasError = true;
-                            const errorEvent = event as any;
-                            if (errorEvent.error) {
-                                currentRoundErrors.push(String(errorEvent.error));
-                            }
-                            break;
-                        }
-                    }
-                }
-            } catch (roundError) {
-                hasError = true;
-                const errorMessage = roundError instanceof Error ? roundError.message : String(roundError);
-                currentRoundErrors.push(errorMessage);
-                yield {
-                    type: 'error',
-                    request_id: currentRoundRequestId,
-                    error: errorMessage,
-                    recoverable: true,
-                    timestamp: new Date().toISOString(),
-                } as ProviderStreamEvent;
+            if (round.messages.length > 0) {
+                lastMessageContent = round.messages.at(-1) || lastMessageContent;
             }
 
-            // A successful terminal tool call ends this turn immediately.
-            if (terminalToolSucceededThisRound) {
-                hasToolCalls = false;
-                hasError = false;
-            }
-
-            if (hasToolCalls) {
+            if (round.hasFollowupToolCalls) {
                 ++toolCallRounds;
+            }
 
-                if (agent.modelSettings?.tool_choice) {
-                    // Ensure that we don't loop the same tool calls
-                    delete agent.modelSettings.tool_choice;
+            const willRetryForError = (() => {
+                if (!round.failure) {
+                    return false;
                 }
-            }
-            if (hasError) {
                 ++errorRounds;
-            }
+                return !round.emittedTerminalOutput && round.failure.recoverable && errorRounds <= maxErrorRetries;
+            })();
 
-            const willRetryForError = hasError && errorRounds < MAX_ERROR_ATTEMPTS;
-            const willContinueForTools = hasToolCalls && toolCallRounds < maxRounds && totalToolCalls < maxToolCalls;
-            const willContinue = willRetryForError || willContinueForTools;
+            const willContinueForTools =
+                !round.failure &&
+                !round.terminalToolSucceeded &&
+                round.hasFollowupToolCalls &&
+                toolCallRounds < maxRounds &&
+                totalToolCalls < maxToolCalls;
 
             let requestStatus = 'completed';
-            if (hasError) {
-                requestStatus = willContinue ? 'error_retrying' : 'error';
-            } else if (hasToolCalls) {
-                requestStatus = willContinue ? 'waiting_for_followup_request' : 'tool_limit_reached';
+            if (round.failure) {
+                requestStatus = willRetryForError ? 'error_retrying' : 'error';
+            } else if (round.hasFollowupToolCalls && !round.terminalToolSucceeded) {
+                requestStatus = willContinueForTools ? 'waiting_for_followup_request' : 'tool_limit_reached';
             }
 
-            if (currentRoundRequestId) {
-                await trace.emitRequestEnd(currentRoundRequestId, {
-                    status: requestStatus,
-                    will_continue: willContinue,
-                    tool_calls: currentRoundToolCalls,
-                    final_response: currentRoundMessages.length > 0 ? currentRoundMessages.join('\n') : undefined,
-                    errors: currentRoundErrors.length > 0 ? currentRoundErrors : undefined,
-                    request_duration_ms: currentRoundRequestDuration,
-                    duration_with_tools_ms: currentRoundDurationWithTools,
-                    request_cost: currentRoundRequestCost,
+            await trace.emitRequestEnd(round.requestId, {
+                status: requestStatus,
+                will_continue: willRetryForError || willContinueForTools,
+                tool_calls: round.toolCallsStarted,
+                final_response: round.messages.length > 0 ? round.messages.join('\n') : undefined,
+                errors: round.errors.length > 0 ? round.errors : undefined,
+                request_duration_ms: round.requestDuration,
+                duration_with_tools_ms: round.durationWithTools,
+                request_cost: round.requestCost,
+            });
+
+            if (round.failure) {
+                const terminalRoundFailure = willRetryForError
+                    ? round.failure
+                    : {
+                          ...round.failure,
+                          recoverable: false,
+                          terminal: true,
+                      };
+                const errorEvent = toErrorEvent(terminalRoundFailure, {
+                    request_id: round.requestId,
+                });
+                yield errorEvent;
+                await emitEvent(errorEvent, agent, model);
+
+                if (willRetryForError) {
+                    agent.retryOptions?.onRetry?.(
+                        {
+                            message: round.failure.error,
+                            code: round.failure.code,
+                            details: round.failure.details,
+                            recoverable: round.failure.recoverable,
+                        },
+                        errorRounds
+                    );
+
+                    const retryingEvent = lifecycle.retrying(round.failure, errorRounds, maxErrorAttempts);
+                    if (retryingEvent) {
+                        yield retryingEvent;
+                        await emitEvent(retryingEvent, agent, model);
+                    }
+
+                    const retryDelayMs = calculateDelay(errorRounds, agent.retryOptions);
+                    const remainingTimeoutMs = getRemainingRequestTimeoutMs(
+                        outerRequestTimeoutMs,
+                        outerRequestStartedAt
+                    );
+                    const boundedRetryDelayMs =
+                        remainingTimeoutMs === undefined
+                            ? retryDelayMs
+                            : remainingTimeoutMs < retryDelayMs
+                              ? 0
+                              : retryDelayMs;
+                    yield* emitRoundAgentDone(round, model);
+                    await waitForRetryDelay(boundedRetryDelayMs, agent.abortSignal);
+                    continue;
+                }
+
+                terminalFailure = terminalRoundFailure;
+                terminalFailureEventEmitted = true;
+                finalRound = { round, model };
+                break;
+            }
+
+            if (round.terminalToolSucceeded) {
+                finalRound = { round, model };
+                break;
+            }
+
+            if (willContinueForTools) {
+                if (agent.modelSettings?.tool_choice) {
+                    agent = {
+                        ...agent,
+                        modelSettings: {
+                            ...agent.modelSettings,
+                        },
+                    };
+                    delete agent.modelSettings.tool_choice;
+                }
+                yield* emitRoundAgentDone(round, model);
+                continue;
+            }
+
+            if (round.hasFollowupToolCalls && !round.terminalToolSucceeded) {
+                terminalFailure = normalizeFailure(
+                    new Error(
+                        toolCallRounds >= maxRounds
+                            ? `Tool call rounds limit reached (${maxRounds}).`
+                            : `Tool call limit reached (${maxToolCalls}).`
+                    ),
+                    {
+                        recoverable: false,
+                        reason:
+                            toolCallRounds >= maxRounds
+                                ? 'max_tool_call_rounds_reached'
+                                : 'max_tool_calls_reached',
+                        ...getFailureRetryOverrides(agent),
+                    }
+                );
+                finalRound = { round, model };
+                break;
+            }
+
+            finalRound = { round, model };
+            break;
+        }
+
+        if (!terminalFailure && agent.verifier && lastMessageContent) {
+            const verification = yield* performVerification(agent, lastMessageContent, await history.getMessages());
+            if (!verification.passed) {
+                terminalFailure = normalizeFailure(new Error(verification.error || 'Verification failed'), {
+                    recoverable: false,
+                    reason: 'verification_failed',
+                    ...getFailureRetryOverrides(agent),
                 });
             }
-        } while (
-            (hasError && errorRounds < MAX_ERROR_ATTEMPTS) ||
-            (hasToolCalls && toolCallRounds < maxRounds && totalToolCalls < maxToolCalls)
-        );
-
-        // If we hit limits, add a notification
-        if (hasToolCalls && toolCallRounds >= maxRounds) {
-            console.log('[ensembleRequest] Tool call rounds limit reached');
-            turnEndReason = 'max_tool_call_rounds_reached';
-        } else if (hasToolCalls && totalToolCalls >= maxToolCalls) {
-            console.log('[ensembleRequest] Total tool calls limit reached');
-            turnEndReason = 'max_tool_calls_reached';
-        } else if (hasError && errorRounds >= MAX_ERROR_ATTEMPTS) {
-            turnStatus = 'error';
-            turnEndReason = 'max_error_attempts_reached';
         }
 
-        // Perform verification if configured
-        if (agent?.verifier && lastMessageContent) {
-            const verificationResult = await performVerification(
-                agent,
-                lastMessageContent,
-                await history.getMessages()
-            );
+        if (terminalFailure) {
+            turnStatus = 'error';
+            turnEndReason = terminalFailure.reason || 'terminal_failure';
+            turnError = terminalFailure.error;
 
-            if (verificationResult) {
-                // Yield the verification result
-                for await (const event of verificationResult) {
-                    yield event;
-                }
+            if (!terminalFailureEventEmitted) {
+                const errorEvent = toErrorEvent(terminalFailure, {
+                    request_id: lifecycle.getRequestId(),
+                });
+                yield errorEvent;
+                await emitEvent(errorEvent, agent, lastModelUsed);
+            }
+
+            const failedEvent = lifecycle.fail(terminalFailure, errorRounds || 1, maxErrorAttempts);
+            if (failedEvent) {
+                yield failedEvent;
+                await emitEvent(failedEvent, agent, lastModelUsed);
+            }
+        } else {
+            const completedEvent = lifecycle.complete();
+            if (completedEvent) {
+                yield completedEvent;
+                await emitEvent(completedEvent, agent, lastModelUsed);
             }
         }
+
+        if (finalRound) {
+            yield* emitRoundAgentDone(finalRound.round, finalRound.model);
+        }
     } catch (err) {
-        // Use unified error handler
-        const error = err as any;
+        if (!lifecycle.getRequestId()) {
+            const startedEvent = lifecycle.begin(randomUUID());
+            if (startedEvent) {
+                yield startedEvent;
+                await emitEvent(startedEvent, agent, lastModelUsed);
+            }
+        }
+
+        const failure = normalizeFailure(err, {
+            recoverable: false,
+            reason: 'exception',
+            ...getFailureRetryOverrides(agent),
+        });
+
         turnStatus = 'error';
         turnEndReason = 'exception';
-        turnError = error.message || 'Unknown error';
-        yield {
-            type: 'error',
-            error: error.message || 'Unknown error',
-            code: error.code,
-            details: error.details,
-            recoverable: error.recoverable,
-            timestamp: new Date().toISOString(),
-        } as ProviderStreamEvent;
+        turnError = failure.error;
+
+        const errorEvent = toErrorEvent(failure, {
+            request_id: lifecycle.getRequestId(),
+        });
+        yield errorEvent;
+        await emitEvent(errorEvent, agent, lastModelUsed);
+
+        const failedEvent = lifecycle.fail(failure, errorRounds || 1, maxErrorAttempts);
+        if (failedEvent) {
+            yield failedEvent;
+            await emitEvent(failedEvent, agent, lastModelUsed);
+        }
     } finally {
         await trace.emitTurnEnd(turnStatus, turnEndReason, {
             error: turnError,
@@ -322,7 +493,6 @@ export async function* ensembleRequest(
             error_rounds: errorRounds,
         });
 
-        // Emit stream end
         yield {
             type: 'stream_end',
             timestamp: new Date().toISOString(),
@@ -330,29 +500,43 @@ export async function* ensembleRequest(
     }
 }
 
-/**
- * Execute one round of request/response
- */
-async function* executeRound(
-    model: string,
-    agent: AgentDefinition,
-    history: MessageHistory,
-    currentToolCalls: number,
-    maxToolCalls: number,
-    trace: TraceContext
-): AsyncGenerator<ProviderStreamEvent> {
-    // Generate request ID and track timing
-    const requestId = randomUUID();
+async function* executeRound(options: {
+    roundRequestId: string;
+    model: string;
+    agent: AgentDefinition;
+    history: MessageHistory;
+    currentToolCalls: number;
+    maxToolCalls: number;
+    trace: TraceContext;
+    startedStatusEvent: ProviderStreamEvent | null;
+    requestTimeoutMs?: number;
+    requestStartedAt?: number;
+}): AsyncGenerator<ProviderStreamEvent, RoundExecutionResult, void> {
+    const { roundRequestId, model, agent, history, currentToolCalls, maxToolCalls, trace, startedStatusEvent } =
+        options;
     const startTime = Date.now();
     let totalCost = 0;
-
-    // Get current messages
     let messages = await history.getMessages(model);
+    let roundAgentDefinition = agent;
+    let requestGuard: ReturnType<typeof createOperationGuard> | undefined;
+    let toolExecutionGuard: ReturnType<typeof createOperationGuard> | undefined;
+    let roundAgent: AgentDefinition = agent;
+    let provider!: ReturnType<typeof getModelProvider>;
+    let stream!: AsyncGenerator<ProviderStreamEvent>;
 
-    // Create and yield agent_start event
+    const roundSummary: RoundExecutionResult = {
+        requestId: roundRequestId,
+        messages: [],
+        errors: [],
+        toolCallsStarted: 0,
+        hasFollowupToolCalls: false,
+        emittedTerminalOutput: false,
+        terminalToolSucceeded: false,
+    };
+
     const agentStartEvent = {
         type: 'agent_start' as const,
-        request_id: requestId,
+        request_id: roundRequestId,
         input: 'content' in messages[0] && typeof messages[0].content === 'string' ? messages[0].content : undefined,
         timestamp: new Date().toISOString(),
         agent: {
@@ -369,320 +553,559 @@ async function* executeRound(
     };
 
     yield agentStartEvent;
-
-    // Also emit through global event controller
     await emitEvent(agentStartEvent, agent, model);
 
-    // Allow agent onRequest hook
-    if (agent.onRequest) {
-        [agent, messages] = await agent.onRequest(agent, messages);
+    try {
+        if (roundAgentDefinition.onRequest) {
+            const [nextAgent, nextMessages] = await roundAgentDefinition.onRequest(roundAgentDefinition, messages);
+            roundAgentDefinition = nextAgent;
+            messages = nextMessages;
+        }
+
+        const remainingTimeoutMs = getRemainingRequestTimeoutMs(options.requestTimeoutMs, options.requestStartedAt);
+        const needsRequestGuard = Boolean(roundAgentDefinition.abortSignal || remainingTimeoutMs !== undefined);
+        if (needsRequestGuard) {
+            if (options.requestTimeoutMs !== undefined && remainingTimeoutMs !== undefined && remainingTimeoutMs <= 0) {
+                throw createRequestTimeoutError(model, options.requestTimeoutMs);
+            }
+
+            requestGuard = createOperationGuard({
+                operationName: `Request generation for ${model}`,
+                abortSignal: roundAgentDefinition.abortSignal,
+                timeoutMs: remainingTimeoutMs,
+            });
+            roundAgent = {
+                ...roundAgentDefinition,
+                abortSignal: requestGuard.signal,
+            };
+        } else {
+            roundAgent = roundAgentDefinition;
+        }
+
+        await waitWhilePaused(100, roundAgent.abortSignal);
+        toolExecutionGuard = createOperationGuard({
+            operationName: `Tool execution for ${model}`,
+            abortSignal: roundAgent.abortSignal,
+        });
+
+        if (startedStatusEvent) {
+            yield startedStatusEvent;
+            await emitEvent(startedStatusEvent, roundAgent, model);
+        }
+
+        provider = getModelProvider(model);
+        await trace.emitRequestStart(roundRequestId, {
+            agent_id: roundAgent.agent_id,
+            provider: provider.provider_id,
+            model,
+            payload: {
+                messages,
+                model_settings: roundAgent.modelSettings,
+                tool_names: roundAgent.tools?.map(tool => tool.definition.function.name) || [],
+            },
+        });
+
+        const rawStream = provider.createResponseStream(messages, model, roundAgent, roundRequestId);
+
+        stream = streamWithAbortAndTimeout(rawStream, {
+            abortSignal: requestGuard?.signal,
+        });
+    } catch (error) {
+        requestGuard?.cleanup();
+        toolExecutionGuard?.cleanup();
+
+        const failure = normalizeFailure(error, {
+            reason: 'request_setup_failed',
+            ...getFailureRetryOverrides(agent),
+        });
+        roundSummary.failure = failure;
+        roundSummary.errors.push(failure.error);
+        roundSummary.requestDuration = Date.now() - startTime;
+        roundSummary.durationWithTools = roundSummary.requestDuration;
+
+        roundSummary.agentDoneEvent = {
+            type: 'agent_done' as const,
+            request_id: roundRequestId,
+            request_duration: roundSummary.requestDuration,
+            duration_with_tools: roundSummary.durationWithTools,
+            timestamp: new Date().toISOString(),
+        };
+        roundSummary.agentDoneAgent = roundAgentDefinition;
+        return roundSummary;
     }
 
-    // Wait while paused before creating the stream
-    await waitWhilePaused(100, agent.abortSignal);
+    const terminalToolNames = getTerminalToolNames(roundAgent);
+    const expectsStructuredOutput = Boolean(roundAgent.modelSettings?.json_schema?.schema);
+    const structuredOutputSchema = roundAgent.modelSettings?.json_schema?.strict === true
+        ? roundAgent.modelSettings.json_schema.schema
+        : undefined;
 
-    // Create provider and agent with fresh settings
-    const provider = getModelProvider(model);
-
-    await trace.emitRequestStart(requestId, {
-        agent_id: agent.agent_id,
-        provider: provider.provider_id,
-        model,
-        payload: {
-            messages,
-            model_settings: agent.modelSettings,
-            tool_names: agent.tools?.map(tool => tool.definition.function.name) || [],
-        },
-    });
-
-    // Stream the response with retry support if available
-    const stream =
-        'createResponseStreamWithRetry' in provider
-            ? (provider as any).createResponseStreamWithRetry(messages, model, agent, requestId)
-            : provider.createResponseStream(messages, model, agent, requestId);
-
-    const toolPromises: Promise<ToolCallResult>[] = [];
-
-    // Map to store formatted arguments for each tool call
+    const toolExecutions: TrackedToolExecution[] = [];
     const toolCallFormattedArgs = new Map<string, string>();
-
-    // Buffer for events emitted during tool execution
     const toolEventBuffer: ProviderStreamEvent[] = [];
     let sawToolCallThisRound = false;
-
-    // Add tool event buffers
-    agent.onToolEvent = async (event: ProviderStreamEvent) => {
-        // Buffer for the main stream
+    let sawTerminalProviderOutcome = false;
+    roundAgent.onToolEvent = async event => {
         toolEventBuffer.push(event);
     };
 
-    for await (let event of stream) {
-        // Add request_id to all events from provider
-        event = { ...event, request_id: requestId };
+    const finalizeToolResults = async function* (mode: 'wait_all' | 'bounded_failure') {
+        const waitForPendingExecutions = async (executions: TrackedToolExecution[], timeoutMs?: number) => {
+            if (executions.length === 0) {
+                return;
+            }
 
-        // Handle tool_start events specially to add formatted arguments
-        if (event.type === 'tool_start') {
-            const toolEvent = event as ToolEvent;
-            if (toolEvent.tool_call) {
-                const toolCall = toolEvent.tool_call;
+            const completionPromise = Promise.all(executions.map(execution => execution.promise.then(() => undefined)));
+            if (timeoutMs === undefined) {
+                await completionPromise;
+                return;
+            }
 
-                // Format arguments to match parameter order if possible
-                let argumentsFormatted: string | undefined;
-                try {
-                    // Find the tool definition to get parameter order
-                    const tool = agent.tools?.find(t => t.definition.function.name === toolCall.function.name);
+            await Promise.race([
+                completionPromise,
+                new Promise(resolve => setTimeout(resolve, timeoutMs)),
+            ]);
+        };
 
-                    if (tool && 'definition' in tool && tool.definition.function.parameters.properties) {
-                        const parsedArgs = JSON.parse(toolCall.function.arguments || '{}');
-                        if (typeof parsedArgs === 'object' && parsedArgs !== null && !Array.isArray(parsedArgs)) {
-                            // Get parameter names in the correct order
-                            const paramNames = Object.keys(tool.definition.function.parameters.properties);
+        const waitForAllExecutions = async (
+            executions: TrackedToolExecution[],
+            abortSignal?: AbortSignal
+        ): Promise<boolean> => {
+            if (executions.length === 0) {
+                return true;
+            }
 
-                            // Create ordered object
-                            const orderedArgs: Record<string, any> = {};
-                            for (const param of paramNames) {
-                                if (param in parsedArgs) {
-                                    orderedArgs[param] = parsedArgs[param];
-                                }
-                            }
+            const completionPromise = Promise.all(executions.map(execution => execution.promise.then(() => undefined))).then(
+                () => true
+            );
 
-                            argumentsFormatted = JSON.stringify(orderedArgs, null, 2);
-                        }
-                    }
-                } catch (error) {
-                    // If formatting fails, we'll just use the original
-                    console.debug('Failed to format tool arguments:', error);
-                }
+            if (!abortSignal) {
+                return completionPromise;
+            }
 
-                // Store formatted arguments if we have them
-                if (argumentsFormatted) {
-                    toolCallFormattedArgs.set(toolCall.id, argumentsFormatted);
-                }
+            if (abortSignal.aborted) {
+                return false;
+            }
 
-                // Create a modified tool call with formatted arguments for the event
-                const modifiedEvent = {
-                    ...event,
-                    tool_call: {
-                        ...toolCall,
-                        function: {
-                            ...toolCall.function,
-                            arguments_formatted: argumentsFormatted,
-                        },
-                    },
+            return new Promise<boolean>(resolve => {
+                const abortListener = () => {
+                    abortSignal.removeEventListener('abort', abortListener);
+                    resolve(false);
                 };
 
-                // Update event to the modified one for further processing
-                event = modifiedEvent;
+                completionPromise.then(completed => {
+                    abortSignal.removeEventListener('abort', abortListener);
+                    resolve(completed);
+                });
+
+                abortSignal.addEventListener('abort', abortListener, { once: true });
+            });
+        };
+
+        let finalizationMode = mode;
+        if (finalizationMode === 'wait_all') {
+            const completedAllExecutions = await waitForAllExecutions(
+                toolExecutions.filter(execution => !execution.settled),
+                requestGuard?.signal
+            );
+
+            if (!completedAllExecutions) {
+                finalizationMode = 'bounded_failure';
             }
         }
 
-        yield event;
+        if (finalizationMode === 'bounded_failure') {
+            toolExecutionGuard?.abort(
+                roundSummary.failure?.error
+                    ? new Error(roundSummary.failure.error)
+                    : new Error('Request finalized after terminal provider failure.')
+            );
 
-        // Emit event through global event controller
-        await emitEvent(event, agent, model);
+            await waitForPendingExecutions(
+                toolExecutions.filter(execution => !execution.settled),
+                TOOL_FAILURE_FINALIZATION_TIMEOUT_MS
+            );
 
-        // Handle different event types
-        switch (event.type) {
-            case 'cost_update': {
-                // Accumulate cost from cost_update events
-                const costEvent = event as any;
-                if (costEvent.usage?.cost) {
-                    totalCost += costEvent.usage.cost;
+            for (const execution of toolExecutions) {
+                if (!execution.settled) {
+                    runningToolTracker.abortRunningTool(execution.toolCall.id || execution.toolCall.call_id || '');
                 }
-                break;
             }
 
-            case 'message_complete': {
-                const messageEvent = event as MessageEventBase;
+            await waitForPendingExecutions(
+                toolExecutions.filter(execution => !execution.settled),
+                TOOL_FAILURE_FINALIZATION_TIMEOUT_MS
+            );
 
-                // Some providers emit assistant prefill/summary text in the same turn as tool_use.
-                // Persisting that assistant message after tool results can violate provider ordering
-                // constraints on follow-up requests (e.g. Claude requires next request to end on user
-                // tool_result after tool_use). Once a tool call has started in this round, ignore
-                // subsequent assistant message_complete payloads for history construction.
-                if (sawToolCallThisRound) {
-                    break;
-                }
+            for (const execution of toolExecutions) {
+                const runningToolId = execution.toolCall.id || execution.toolCall.call_id || '';
+                if (execution.settled) {
+                    const leakedRunningTool = runningToolId
+                        ? runningToolTracker.getRunningTool(runningToolId)
+                        : undefined;
 
-                if (
-                    messageEvent.thinking_content ||
-                    (!messageEvent.content && messageEvent.message_id) // Note that some providers require empty thinking nodes to be included in the conversation history
-                ) {
-                    const thinkingMessage = convertToThinkingMessage(messageEvent, model);
-
-                    if (agent.onThinking) {
-                        await agent.onThinking(thinkingMessage);
+                    if (leakedRunningTool) {
+                        const failureResult = execution.result ?? createToolFinalizationFailureResult(execution.toolCall);
+                        await runningToolTracker.failRunningTool(
+                            runningToolId,
+                            failureResult.error || 'Tool execution failed during bounded finalization.'
+                        );
                     }
-
-                    history.add(thinkingMessage);
-                    yield {
-                        type: 'response_output',
-                        message: thinkingMessage,
-                        request_id: requestId,
-                    };
                 }
-                if (messageEvent.content) {
-                    const contentMessage = convertToOutputMessage(messageEvent, model, 'completed');
-
-                    if (agent.onResponse) {
-                        await agent.onResponse(contentMessage);
-                    }
-
-                    history.add(contentMessage);
-                    yield {
-                        type: 'response_output',
-                        message: contentMessage,
-                        request_id: requestId,
-                    };
-                }
-                break;
-            }
-
-            case 'tool_start': {
-                const toolEvent = event as ToolEvent;
-                if (!toolEvent.tool_call) {
-                    break;
-                }
-                sawToolCallThisRound = true;
-
-                // Check if we'll exceed the limit
-                const remainingCalls = maxToolCalls - currentToolCalls;
-                if (remainingCalls <= 0) {
-                    console.warn(`Tool call limit reached (${maxToolCalls}). Skipping tool calls.`);
-                    // Don't count this as having tool calls if we're at the limit
-                    break;
-                }
-
-                const toolCall = toolEvent.tool_call;
-
-                // Add function call
-                const functionCall = convertToFunctionCall(toolCall, model, 'completed');
-
-                // Run tools in parallel
-                toolPromises.push(processToolCall(toolCall, agent));
-
-                history.add(functionCall);
-                yield {
-                    type: 'response_output',
-                    message: functionCall,
-                    request_id: requestId,
-                };
-                break;
-            }
-
-            case 'error': {
-                // Log errors but don't add them to messages
-                console.error('[executeRound] Error event:', truncateLargeValues((event as any).error));
-                break;
             }
         }
-    }
 
-    // Calculate request duration
-    const request_duration = Date.now() - startTime;
+        const toolResults =
+            finalizationMode === 'wait_all'
+                ? await Promise.all(toolExecutions.map(execution => execution.promise))
+                : toolExecutions.flatMap(execution => (execution.settled && execution.result ? [execution.result] : []));
 
-    // Complete then process any tool calls
-    const toolResults: ToolCallResult[] = await Promise.all(toolPromises);
-    const terminalToolNames = getTerminalToolNames(agent);
+        for (const toolResult of toolResults) {
+            const toolName = toolResult.toolCall.function.name;
+            const isTerminalTool = terminalToolNames.has(toolName);
+            const formattedArgs = toolCallFormattedArgs.get(toolResult.toolCall.id);
+            const toolCallWithFormattedArgs = formattedArgs
+                ? {
+                      ...toolResult.toolCall,
+                      function: {
+                          ...toolResult.toolCall.function,
+                          arguments_formatted: formattedArgs,
+                      },
+                  }
+                : toolResult.toolCall;
 
-    for (const toolResult of toolResults) {
-        const toolName = toolResult.toolCall.function.name;
-        const isTerminalTool = terminalToolNames.has(toolName);
+            const toolDoneEvent: ProviderStreamEvent = {
+                type: 'tool_done',
+                request_id: roundRequestId,
+                tool_call: toolCallWithFormattedArgs,
+                result: {
+                    call_id: toolResult.call_id || toolResult.id,
+                    output: toolResult.output,
+                    error: toolResult.error,
+                },
+            };
 
-        // Get the formatted arguments if we stored them
-        const formattedArgs = toolCallFormattedArgs.get(toolResult.toolCall.id);
+            if (isTerminalTool && !toolResult.error) {
+                roundSummary.terminalToolSucceeded = true;
+            }
 
-        // Create tool call with formatted arguments
-        const toolCallWithFormattedArgs = formattedArgs
-            ? {
-                  ...toolResult.toolCall,
-                  function: {
-                      ...toolResult.toolCall.function,
-                      arguments_formatted: formattedArgs,
-                  },
-              }
-            : toolResult.toolCall;
-
-        const toolDoneEvent: ProviderStreamEvent = {
-            type: 'tool_done',
-            request_id: requestId,
-            tool_call: toolCallWithFormattedArgs,
-            result: {
-                call_id: toolResult.call_id || toolResult.id,
+            yield toolDoneEvent;
+            await emitEvent(toolDoneEvent, roundAgent, model);
+            await trace.emitToolDone(roundRequestId, toolResult.toolCall.id, {
+                tool_name: toolName,
+                call_id: toolResult.call_id,
                 output: toolResult.output,
                 error: toolResult.error,
-            },
-        };
-        yield toolDoneEvent;
-        // Emit tool done event through global event controller
-        await emitEvent(toolDoneEvent, agent, model);
+            });
 
-        // For terminal tools, don't add output to history or send it back to the model.
-        if (!isTerminalTool) {
-            const functionOutput = convertToFunctionCallOutput(toolResult, model, 'completed');
+            if (!isTerminalTool) {
+                const functionOutput = convertToFunctionCallOutput(toolResult, model, 'completed');
+                history.add(functionOutput);
+                yield {
+                    type: 'response_output' as const,
+                    message: functionOutput,
+                    request_id: roundRequestId,
+                };
+            }
+        }
 
-            history.add(functionOutput);
-            yield {
-                type: 'response_output',
-                message: functionOutput,
-                request_id: requestId,
-            };
+        for (const bufferedEvent of toolEventBuffer) {
+            yield { ...bufferedEvent, request_id: roundRequestId };
+        }
+    };
+
+    try {
+        for await (let event of stream) {
+            event = { ...event, request_id: roundRequestId };
+
+            if (event.type === 'error') {
+                const failure = normalizeFailure(event, {
+                    error: (event as any).error,
+                    recoverable: (event as any).recoverable,
+                    code: (event as any).code,
+                    details: (event as any).details,
+                    ...getFailureRetryOverrides(agent),
+                });
+                roundSummary.failure = selectMoreSevereFailure(roundSummary.failure, failure);
+                roundSummary.errors.push(failure.error);
+                continue;
+            }
+
+            if (event.type === 'message_complete' && structuredOutputSchema) {
+                const messageEvent = event as MessageEventBase;
+                if (hasTerminalTextContent(messageEvent.content, true)) {
+                    const validationResult = validateJsonResponseContent(messageEvent.content, structuredOutputSchema);
+                    if (!validationResult.ok && 'error' in validationResult) {
+                        const failure = normalizeFailure(new Error(validationResult.error), {
+                            recoverable: false,
+                            reason: 'structured_output_validation_failed',
+                        });
+                        roundSummary.failure = selectMoreSevereFailure(roundSummary.failure, failure);
+                        roundSummary.errors.push(failure.error);
+                        continue;
+                    }
+                }
+            }
+
+            if (event.type === 'tool_start') {
+                const toolEvent = event as ToolEvent;
+                if (toolEvent.tool_call) {
+                    const toolCall = toolEvent.tool_call;
+
+                    let argumentsFormatted: string | undefined;
+                    try {
+                        const tool = roundAgent.tools?.find(t => t.definition.function.name === toolCall.function.name);
+                        if (tool?.definition.function.parameters.properties) {
+                            const parsedArgs = JSON.parse(toolCall.function.arguments || '{}');
+                            if (typeof parsedArgs === 'object' && parsedArgs !== null && !Array.isArray(parsedArgs)) {
+                                const paramNames = Object.keys(tool.definition.function.parameters.properties);
+                                const orderedArgs: Record<string, any> = {};
+                                for (const param of paramNames) {
+                                    if (param in parsedArgs) {
+                                        orderedArgs[param] = parsedArgs[param];
+                                    }
+                                }
+                                argumentsFormatted = JSON.stringify(orderedArgs, null, 2);
+                            }
+                        }
+                    } catch (error) {
+                        console.debug('Failed to format tool arguments:', error);
+                    }
+
+                    if (argumentsFormatted) {
+                        toolCallFormattedArgs.set(toolCall.id, argumentsFormatted);
+                    }
+
+                    event = {
+                        ...event,
+                        tool_call: {
+                            ...toolCall,
+                            function: {
+                                ...toolCall.function,
+                                arguments_formatted: argumentsFormatted,
+                            },
+                        },
+                    };
+                }
+            }
+
+            if (event.type === 'message_complete') {
+                const messageEvent = event as MessageEventBase;
+                if (hasTerminalTextContent(messageEvent.content, expectsStructuredOutput)) {
+                    sawTerminalProviderOutcome = true;
+                }
+            } else if (event.type === 'tool_start' || event.type === 'file_complete') {
+                sawTerminalProviderOutcome = true;
+            }
+
+            yield event;
+            await emitEvent(event, roundAgent, model);
+
+            switch (event.type) {
+                case 'cost_update': {
+                    const costEvent = event as any;
+                    if (costEvent.usage?.cost) {
+                        totalCost += costEvent.usage.cost;
+                    }
+                    break;
+                }
+
+                case 'message_complete': {
+                    const messageEvent = event as MessageEventBase;
+                    if (sawToolCallThisRound) {
+                        break;
+                    }
+
+                    if (
+                        messageEvent.thinking_content ||
+                        (!messageEvent.content && messageEvent.message_id)
+                    ) {
+                        const thinkingMessage = convertToThinkingMessage(messageEvent, model);
+                        if (roundAgent.onThinking) {
+                            await roundAgent.onThinking(thinkingMessage);
+                        }
+                        history.add(thinkingMessage);
+                        yield {
+                            type: 'response_output',
+                            message: thinkingMessage,
+                            request_id: roundRequestId,
+                        };
+                    }
+
+                    if (hasTerminalTextContent(messageEvent.content, expectsStructuredOutput)) {
+                        roundSummary.emittedTerminalOutput = true;
+                        roundSummary.messages.push(messageEvent.content);
+                        const contentMessage = convertToOutputMessage(messageEvent, model, 'completed');
+                        if (roundAgent.onResponse) {
+                            await roundAgent.onResponse(contentMessage);
+                        }
+                        history.add(contentMessage);
+                        yield {
+                            type: 'response_output',
+                            message: contentMessage,
+                            request_id: roundRequestId,
+                        };
+                    }
+                    break;
+                }
+
+                case 'file_complete': {
+                    roundSummary.emittedTerminalOutput = true;
+                    break;
+                }
+
+                case 'tool_start': {
+                    const toolEvent = event as ToolEvent;
+                    if (!toolEvent.tool_call) {
+                        break;
+                    }
+
+                    if (!sawToolCallThisRound) {
+                        roundSummary.emittedTerminalOutput = false;
+                        roundSummary.messages = [];
+                    }
+                    sawToolCallThisRound = true;
+
+                    const remainingCalls = maxToolCalls - currentToolCalls - roundSummary.toolCallsStarted;
+                    if (remainingCalls <= 0) {
+                        console.warn(`Tool call limit reached (${maxToolCalls}). Skipping tool calls.`);
+                        const failure = normalizeFailure(
+                            new Error(
+                                `Tool call limit reached (${maxToolCalls}). Cannot execute tool ${toolEvent.tool_call.function.name}.`
+                            ),
+                            {
+                                recoverable: false,
+                                reason: 'max_tool_calls_reached',
+                                ...getFailureRetryOverrides(agent),
+                            }
+                        );
+                        roundSummary.failure = selectMoreSevereFailure(roundSummary.failure, failure);
+                        if (!roundSummary.errors.includes(failure.error)) {
+                            roundSummary.errors.push(failure.error);
+                        }
+                        break;
+                    }
+
+                    const toolCall = toolEvent.tool_call;
+                    const functionCall = convertToFunctionCall(toolCall, model, 'completed');
+                    history.add(functionCall);
+                    yield {
+                        type: 'response_output',
+                        message: functionCall,
+                        request_id: roundRequestId,
+                    };
+
+                    ++roundSummary.toolCallsStarted;
+                    if (!terminalToolNames.has(toolCall.function.name)) {
+                        roundSummary.hasFollowupToolCalls = true;
+                    }
+
+                    await trace.emitToolStart(roundRequestId, toolCall.id, {
+                        tool_name: toolCall.function.name,
+                        arguments: toolCall.function.arguments,
+                        arguments_formatted: toolCall.function.arguments_formatted,
+                    });
+
+                    const trackedExecution: TrackedToolExecution = {
+                        toolCall,
+                        promise: processToolCall(toolCall, {
+                            ...roundAgent,
+                            abortSignal: toolExecutionGuard?.signal ?? roundAgent.abortSignal,
+                        }),
+                        settled: false,
+                    };
+                    trackedExecution.promise = trackedExecution.promise.then(result => {
+                        if (!trackedExecution.settled) {
+                            trackedExecution.settled = true;
+                            trackedExecution.result = result;
+                        }
+                        return trackedExecution.result ?? result;
+                    });
+                    toolExecutions.push(trackedExecution);
+                    break;
+                }
+            }
+        }
+    } catch (error) {
+        const streamFailure = normalizeFailure(error, {
+            reason: 'request_stream_failed',
+            ...getFailureRetryOverrides(agent),
+        });
+        roundSummary.failure = selectMoreSevereFailure(roundSummary.failure, streamFailure);
+        roundSummary.errors.push(streamFailure.error);
+    }
+
+    if (!sawTerminalProviderOutcome && !roundSummary.failure) {
+        const emptyResponseFailure = normalizeFailure(
+            new Error(
+                `Provider ${provider.provider_id} ended the stream without any terminal content, tool calls, files, or errors.`
+            ),
+            {
+                recoverable: false,
+                reason: 'empty_provider_response',
+                ...getFailureRetryOverrides(agent),
+            }
+        );
+        roundSummary.failure = emptyResponseFailure;
+        roundSummary.errors.push(emptyResponseFailure.error);
+    }
+
+    roundSummary.requestDuration = Date.now() - startTime;
+
+    const shouldUseBoundedFailureFinalization = Boolean(roundSummary.failure?.terminal);
+    yield* finalizeToolResults(shouldUseBoundedFailureFinalization ? 'bounded_failure' : 'wait_all');
+
+    if (requestGuard?.signal.aborted) {
+        const abortFailure = normalizeFailure(requestGuard.signal.reason, {
+            reason: 'request_stream_failed',
+            ...getFailureRetryOverrides(agent),
+        });
+        roundSummary.failure = selectMoreSevereFailure(roundSummary.failure, abortFailure);
+        if (!roundSummary.errors.includes(abortFailure.error)) {
+            roundSummary.errors.push(abortFailure.error);
         }
     }
 
-    // Calculate full duration
-    const duration_with_tools = Date.now() - startTime;
+    roundSummary.durationWithTools = Date.now() - startTime;
+    roundSummary.requestCost = totalCost > 0 ? totalCost : undefined;
 
-    // Create agent_done event
-    const agentDoneEvent = {
+    roundSummary.agentDoneEvent = {
         type: 'agent_done' as const,
-        request_id: requestId,
-        request_cost: totalCost > 0 ? totalCost : undefined,
-        request_duration,
-        duration_with_tools,
+        request_id: roundRequestId,
+        request_cost: roundSummary.requestCost,
+        request_duration: roundSummary.requestDuration,
+        duration_with_tools: roundSummary.durationWithTools,
         timestamp: new Date().toISOString(),
     };
+    roundSummary.agentDoneAgent = roundAgent;
+    requestGuard?.cleanup();
+    toolExecutionGuard?.cleanup();
 
-    // Yield to stream
-    yield agentDoneEvent;
-
-    // Also emit through global event controller
-    await emitEvent(agentDoneEvent, agent, model);
-
-    // Yield any events that were buffered during tool execution
-    for (const bufferedEvent of toolEventBuffer) {
-        yield { ...bufferedEvent, request_id: requestId };
-    }
+    return roundSummary;
 }
 
-/**
- * Perform verification with retry logic
- */
 async function* performVerification(
     agent: AgentDefinition,
     output: string,
     messages: ResponseInput,
     attempt: number = 0
-): AsyncGenerator<ProviderStreamEvent> {
-    if (!agent.verifier) return;
+): AsyncGenerator<ProviderStreamEvent, { passed: boolean; error?: string }, void> {
+    if (!agent.verifier) {
+        return { passed: true };
+    }
 
     const maxAttempts = agent.maxVerificationAttempts || 2;
-
-    // Perform verification
     const verification = await verifyOutput(agent.verifier, output, messages);
 
     if (verification.status === 'pass') {
-        // Verification passed
         yield {
             type: 'message_delta',
             content: '\n\n✓ Output verified',
         } as ProviderStreamEvent;
-        return;
+        return { passed: true };
     }
 
-    // Verification failed
     if (attempt < maxAttempts - 1) {
-        // Retry with feedback
         yield {
             type: 'message_delta',
             content: `\n\n⚠️ Verification failed: ${verification.reason}\n\nRetrying...`,
@@ -703,7 +1126,6 @@ async function* performVerification(
             } as ResponseInputMessage,
         ];
 
-        // Create a new agent for retry without verifier to avoid infinite recursion
         const retryAgent: AgentDefinition = {
             ...agent,
             verifier: undefined,
@@ -714,6 +1136,10 @@ async function* performVerification(
         let retryOutput = '';
 
         for await (const event of retryStream) {
+            if (event.type === 'operation_status' || event.type === 'error') {
+                continue;
+            }
+
             yield event;
 
             if (event.type === 'message_complete' && 'content' in event) {
@@ -721,47 +1147,44 @@ async function* performVerification(
             }
         }
 
-        // Verify the retry
         if (retryOutput) {
-            yield* performVerification(agent, retryOutput, messages, attempt + 1);
+            return yield* performVerification(agent, retryOutput, messages, attempt + 1);
         }
-    } else {
-        // Max attempts reached
-        yield {
-            type: 'message_delta',
-            content: `\n\n❌ Verification failed after ${maxAttempts} attempts: ${verification.reason}`,
-        } as ProviderStreamEvent;
+
+        return {
+            passed: false,
+            error: 'Verification retry did not produce a final response.',
+        };
     }
+
+    const failureMessage = `Verification failed after ${maxAttempts} attempts: ${verification.reason}`;
+    yield {
+        type: 'message_delta',
+        content: `\n\n❌ ${failureMessage}`,
+    } as ProviderStreamEvent;
+
+    return {
+        passed: false,
+        error: failureMessage,
+    };
 }
 
-/**
- * Process tool calls with enhanced features
- */
 async function processToolCall(toolCall: ToolCall, agent: AgentDefinition): Promise<ToolCallResult> {
-    // Process all tool calls in parallel
-
-    // Apply tool handler lifecycle if available
-    if (agent.onToolCall) {
-        await agent.onToolCall(toolCall);
-    }
-
-    // Execute tool
     try {
+        if (agent.onToolCall) {
+            await agent.onToolCall(toolCall);
+        }
+
         if (!agent.tools) {
             throw new Error('No tools available for agent');
         }
 
-        // Find the tool
         const tool = agent.tools.find(t => t.definition.function.name === toolCall.function.name);
-
         if (!tool || !('function' in tool)) {
             throw new Error(`Tool ${toolCall.function.name} not found`);
         }
 
-        // Execute with enhanced lifecycle management
-        const rawResult = await handleToolCall(toolCall, tool, agent);
-
-        // Process the result (summarization, truncation, etc.)
+        const rawResult = await handleToolCall(toolCall, tool, agent, agent.abortSignal);
         const processedResult = await processToolResult(toolCall, rawResult, agent, tool.allowSummary);
 
         const toolCallResult: ToolCallResult = {
@@ -771,37 +1194,47 @@ async function processToolCall(toolCall: ToolCall, agent: AgentDefinition): Prom
             output: processedResult,
         };
 
-        // Call onToolResult callback
         if (agent.onToolResult) {
             await agent.onToolResult(toolCallResult);
         }
 
         return toolCallResult;
     } catch (error) {
-        // Handle tool error
-        const errorOutput =
-            error instanceof Error
-                ? `Tool execution failed: ${error.message}`
-                : `Tool execution failed: ${String(error)}`;
-
-        const toolCallResult: ToolCallResult = {
-            toolCall,
-            id: toolCall.id,
-            call_id: toolCall.call_id || toolCall.id,
-            error: errorOutput,
-        };
+        const toolCallResult = createToolFailureResult(toolCall, error);
 
         if (agent.onToolError) {
-            await agent.onToolError(toolCallResult);
+            try {
+                await agent.onToolError(toolCallResult);
+            } catch (hookError) {
+                console.error('[processToolCall] onToolError hook failed:', hookError);
+            }
         }
 
         return toolCallResult;
     }
 }
 
-/**
- * Merge history thread back to main history
- */
+function createToolFailureResult(toolCall: ToolCall, error: unknown): ToolCallResult {
+    const errorOutput =
+        error instanceof Error
+            ? `Tool execution failed: ${error.message}`
+            : `Tool execution failed: ${String(error)}`;
+
+    return {
+        toolCall,
+        id: toolCall.id,
+        call_id: toolCall.call_id || toolCall.id,
+        error: errorOutput,
+    };
+}
+
+function createToolFinalizationFailureResult(toolCall: ToolCall): ToolCallResult {
+    return createToolFailureResult(
+        toolCall,
+        'Tool did not finish before request finalization after a terminal provider failure.'
+    );
+}
+
 export function mergeHistoryThread(mainHistory: ResponseInput, thread: ResponseInput, startIndex: number): void {
     const newMessages = thread.slice(startIndex);
     mainHistory.push(...newMessages);

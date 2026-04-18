@@ -31,6 +31,7 @@ import {
 } from '../types/types.js';
 import { BaseModelProvider } from './base_provider.js';
 import { costTracker } from '../utils/cost_tracker.js';
+import { createProviderErrorEvent } from '../utils/failure_detection.js';
 import { log_llm_error, log_llm_request, log_llm_response } from '../utils/llm_logger.js';
 import { isPaused } from '../utils/pause_controller.js';
 import { findModel } from '../data/model_data.js';
@@ -202,6 +203,44 @@ function getImageMediaType(imageData: string): string {
  */
 function cleanBase64Data(imageData: string): string {
     return imageData.replace(/^data:image\/[a-z]+;base64,/, '');
+}
+
+function finalizeClaudeToolArguments(currentToolCall: any): string | undefined {
+    const partialArgs = currentToolCall?.function?._partialArguments;
+    if (!partialArgs) {
+        return undefined;
+    }
+
+    try {
+        JSON.parse(partialArgs);
+        currentToolCall.function.arguments = partialArgs;
+        delete currentToolCall.function._partialArguments;
+        return undefined;
+    } catch (jsonError) {
+        console.warn(
+            `Invalid JSON in partial arguments for ${currentToolCall.function.name}: ${partialArgs}`,
+            jsonError
+        );
+
+        if (partialArgs.includes('}{')) {
+            const firstBraceIndex = partialArgs.indexOf('{');
+            const firstCloseBraceIndex = partialArgs.indexOf('}') + 1;
+            if (firstBraceIndex !== -1 && firstCloseBraceIndex > firstBraceIndex) {
+                const firstJsonStr = partialArgs.substring(firstBraceIndex, firstCloseBraceIndex);
+                try {
+                    JSON.parse(firstJsonStr);
+                    currentToolCall.function.arguments = firstJsonStr;
+                    delete currentToolCall.function._partialArguments;
+                    return undefined;
+                } catch (extractError) {
+                    console.error(`Failed to extract valid JSON: ${firstJsonStr}`, extractError);
+                }
+            }
+        }
+
+        delete currentToolCall.function._partialArguments;
+        return `Claude emitted malformed tool arguments for ${currentToolCall.function.name}.`;
+    }
 }
 
 /**
@@ -708,6 +747,7 @@ export class ClaudeProvider extends BaseModelProvider {
             // Make the API call
             const stream = await this.client.messages.create(requestParams, {
                 ...(headers ? { headers } : {}),
+                signal: agent.abortSignal,
             });
 
             const events: ProviderStreamEvent[] = [];
@@ -894,48 +934,17 @@ export class ClaudeProvider extends BaseModelProvider {
                         currentToolCall
                     ) {
                         try {
-                            // Finalize arguments if they were streamed partially
-                            if (currentToolCall.function._partialArguments) {
-                                // Validate that we have proper JSON before finalizing
-                                const partialArgs = currentToolCall.function._partialArguments;
-                                try {
-                                    JSON.parse(partialArgs); // Validate JSON
-                                    currentToolCall.function.arguments = partialArgs;
-                                } catch (jsonError) {
-                                    console.warn(
-                                        `Invalid JSON in partial arguments for ${currentToolCall.function.name}: ${partialArgs}`,
-                                        jsonError
-                                    );
-                                    // Try to extract the first valid JSON object if it's concatenated
-                                    if (partialArgs.includes('}{')) {
-                                        const firstBraceIndex = partialArgs.indexOf('{');
-                                        const firstCloseBraceIndex = partialArgs.indexOf('}') + 1;
-                                        if (firstBraceIndex !== -1 && firstCloseBraceIndex > firstBraceIndex) {
-                                            const firstJsonStr = partialArgs.substring(
-                                                firstBraceIndex,
-                                                firstCloseBraceIndex
-                                            );
-                                            try {
-                                                JSON.parse(firstJsonStr); // Validate extracted JSON
-                                                currentToolCall.function.arguments = firstJsonStr;
-                                                console.log(
-                                                    `Extracted valid JSON from partial arguments: ${firstJsonStr}`
-                                                );
-                                            } catch (extractError) {
-                                                console.error(
-                                                    `Failed to extract valid JSON: ${firstJsonStr}`,
-                                                    extractError
-                                                );
-                                                currentToolCall.function.arguments = '{}';
-                                            }
-                                        } else {
-                                            currentToolCall.function.arguments = '{}';
-                                        }
-                                    } else {
-                                        currentToolCall.function.arguments = '{}';
-                                    }
-                                }
-                                delete currentToolCall.function._partialArguments; // Clean up temporary field
+                            const malformedArgumentsError = finalizeClaudeToolArguments(currentToolCall);
+                            if (malformedArgumentsError) {
+                                log_llm_error(requestId, malformedArgumentsError);
+                                yield {
+                                    type: 'error',
+                                    error: malformedArgumentsError,
+                                    recoverable: false,
+                                };
+                                toolCallStarted = false;
+                                currentToolCall = null;
+                                continue;
                             }
                             yield {
                                 type: 'tool_start',
@@ -975,44 +984,17 @@ export class ClaudeProvider extends BaseModelProvider {
                             // Only emit tool_start if we haven't already emitted it
                             // This is a fallback in case content_block_stop didn't fire
                             // Finalize arguments if they were streamed partially with proper JSON validation
-                            if (currentToolCall.function._partialArguments) {
-                                const partialArgs = currentToolCall.function._partialArguments;
-                                try {
-                                    JSON.parse(partialArgs); // Validate JSON
-                                    currentToolCall.function.arguments = partialArgs;
-                                } catch (jsonError) {
-                                    console.warn(
-                                        `Invalid JSON in partial arguments at message_stop for ${currentToolCall.function.name}: ${partialArgs}`,
-                                        jsonError
-                                    );
-                                    // Try to extract the first valid JSON object if it's concatenated
-                                    if (partialArgs.includes('}{')) {
-                                        const firstBraceIndex = partialArgs.indexOf('{');
-                                        const firstCloseBraceIndex = partialArgs.indexOf('}') + 1;
-                                        if (firstBraceIndex !== -1 && firstCloseBraceIndex > firstBraceIndex) {
-                                            const firstJsonStr = partialArgs.substring(
-                                                firstBraceIndex,
-                                                firstCloseBraceIndex
-                                            );
-                                            try {
-                                                JSON.parse(firstJsonStr); // Validate extracted JSON
-                                                currentToolCall.function.arguments = firstJsonStr;
-                                                console.log(`Extracted valid JSON at message_stop: ${firstJsonStr}`);
-                                            } catch (extractError) {
-                                                console.error(
-                                                    `Failed to extract valid JSON at message_stop: ${firstJsonStr}`,
-                                                    extractError
-                                                );
-                                                currentToolCall.function.arguments = '{}';
-                                            }
-                                        } else {
-                                            currentToolCall.function.arguments = '{}';
-                                        }
-                                    } else {
-                                        currentToolCall.function.arguments = '{}';
-                                    }
-                                }
-                                delete currentToolCall.function._partialArguments;
+                            const malformedArgumentsError = finalizeClaudeToolArguments(currentToolCall);
+                            if (malformedArgumentsError) {
+                                log_llm_error(requestId, malformedArgumentsError);
+                                yield {
+                                    type: 'error',
+                                    error: malformedArgumentsError,
+                                    recoverable: false,
+                                };
+                                currentToolCall = null;
+                                toolCallStarted = false;
+                                continue;
                             }
 
                             yield {
@@ -1063,6 +1045,7 @@ export class ClaudeProvider extends BaseModelProvider {
                             error:
                                 'Claude API error: ' +
                                 (event.error ? event.error.message || JSON.stringify(event.error) : 'Unknown error'),
+                            recoverable: false,
                         };
                         // Don't mark as successful on API error
                         streamCompletedSuccessfully = false;
@@ -1111,20 +1094,26 @@ export class ClaudeProvider extends BaseModelProvider {
             } catch (streamError) {
                 log_llm_error(requestId, streamError);
                 console.error('Error processing Claude stream:', streamError);
-                yield {
-                    type: 'error',
-                    error: `Claude stream error (${model}): ${streamError}`,
-                };
+                yield createProviderErrorEvent(streamError, {
+                    prefix: `Claude stream error (${model}): `,
+                    request_id: requestId,
+                    reason: 'request_stream_failed',
+                    retryableErrors: agent.retryOptions?.additionalRetryableErrors,
+                    retryableStatusCodes: agent.retryOptions?.additionalRetryableStatusCodes,
+                });
             } finally {
                 log_llm_response(requestId, events);
             }
         } catch (error) {
             log_llm_error(requestId, error);
             console.error('Error in Claude streaming completion setup:', error);
-            yield {
-                type: 'error',
-                error: `Claude request error (${model}): ${error}`,
-            };
+            yield createProviderErrorEvent(error, {
+                prefix: `Claude request error (${model}): `,
+                request_id: requestId,
+                reason: 'request_setup_failed',
+                retryableErrors: agent.retryOptions?.additionalRetryableErrors,
+                retryableStatusCodes: agent.retryOptions?.additionalRetryableStatusCodes,
+            });
         } finally {
             // Track cost if we have token usage data
             if (totalInputTokens > 0 || totalOutputTokens > 0) {

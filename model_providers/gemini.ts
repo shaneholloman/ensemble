@@ -1106,6 +1106,9 @@ export class GeminiProvider extends BaseModelProvider {
                     removeAdditionalProperties(config.responseSchema);
                 }
             }
+            if (agent.abortSignal) {
+                config.abortSignal = agent.abortSignal;
+            }
 
             // Check if any tools require special handling
             let hasGoogleWebSearch = false;
@@ -1218,7 +1221,9 @@ export class GeminiProvider extends BaseModelProvider {
                 ? (async function* (provider: GeminiProvider) {
                       yield (await (provider.client.models as any).generateContent(requestParams)) as GenerateContentResponse;
                   })(this)
-                : this.retryStreamOnIncompleteJson(() => this.client.models.generateContentStream(requestParams));
+                : this.retryStreamOnIncompleteJson(() =>
+                      this.client.models.generateContentStream(requestParams)
+                  );
 
             let usageMetadata: GenerateContentResponseUsageMetadata | undefined;
 

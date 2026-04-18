@@ -245,6 +245,135 @@ describe('Gemini 3.x model support', () => {
         expect(requestArg?.config?.thinkingConfig?.thinkingBudget).toBe(0);
     });
 
+    it('passes abort signals through config for Gemini streaming requests', async () => {
+        const provider = new GeminiProvider('test-key');
+        const abortSignal = new AbortController().signal;
+        const generateContentStream = vi.fn().mockResolvedValue(
+            makeSingleChunkStream({
+                candidates: [
+                    {
+                        content: {
+                            parts: [{ text: '{"ok":true}' }],
+                        },
+                    },
+                ],
+                usageMetadata: {
+                    promptTokenCount: 10,
+                    candidatesTokenCount: 5,
+                    totalTokenCount: 15,
+                },
+            })
+        );
+
+        (provider as any)._client = {
+            models: {
+                generateContentStream,
+            },
+        };
+
+        const stream = provider.createResponseStream(
+            [
+                {
+                    type: 'message',
+                    role: 'user',
+                    content: 'Return JSON.',
+                },
+            ] as any,
+            'gemini-3.1-flash-lite-preview',
+            {
+                agent_id: 'test-gemini-abort-stream',
+                abortSignal,
+            } as any,
+            'req-gemini-abort-stream'
+        );
+
+        for await (const _event of stream) {
+            // Drain stream.
+        }
+
+        const requestArg = generateContentStream.mock.calls.at(0)?.[0] as any;
+        expect(requestArg?.config?.abortSignal).toBe(abortSignal);
+        expect(requestArg?.abortSignal).toBeUndefined();
+    });
+
+    it('passes abort signals through config for Gemini non-streaming image JSON requests', async () => {
+        const provider = new GeminiProvider('test-key');
+        const abortSignal = new AbortController().signal;
+        const generateContent = vi.fn().mockResolvedValue({
+            candidates: [
+                {
+                    content: {
+                        parts: [{ text: '{"dominant_color":"red","confidence":0.9}' }],
+                    },
+                },
+            ],
+            usageMetadata: {
+                promptTokenCount: 10,
+                candidatesTokenCount: 5,
+                totalTokenCount: 15,
+            },
+        });
+        const generateContentStream = vi.fn();
+
+        (provider as any)._client = {
+            models: {
+                generateContent,
+                generateContentStream,
+            },
+        };
+
+        const stream = provider.createResponseStream(
+            [
+                {
+                    type: 'message',
+                    role: 'user',
+                    content: [
+                        {
+                            type: 'input_text',
+                            text: 'Analyze the image and return JSON.',
+                        },
+                        {
+                            type: 'image',
+                            data: ONE_PX_PNG_BASE64,
+                            mime_type: 'image/png',
+                        },
+                    ],
+                },
+            ] as any,
+            'gemini-3.1-flash-lite-preview',
+            {
+                agent_id: 'test-gemini-abort-nonstream',
+                abortSignal,
+                modelSettings: {
+                    json_schema: {
+                        name: 'image_analysis',
+                        type: 'json_schema',
+                        strict: true,
+                        schema: {
+                            type: 'object',
+                            properties: {
+                                dominant_color: { type: 'string' },
+                                confidence: { type: 'number' },
+                            },
+                            required: ['dominant_color', 'confidence'],
+                            additionalProperties: false,
+                        },
+                    },
+                },
+            } as any,
+            'req-gemini-abort-nonstream'
+        );
+
+        for await (const _event of stream) {
+            // Drain stream.
+        }
+
+        expect(generateContentStream).not.toHaveBeenCalled();
+        const requestArg = generateContent.mock.calls.at(0)?.[0] as any;
+        expect(requestArg?.config?.abortSignal).toBe(abortSignal);
+        expect(requestArg?.abortSignal).toBeUndefined();
+    });
+
     it('registers Gemini 3.1 Flash Image Preview pricing metadata', () => {
         const imageModel = findModel('gemini-3.1-flash-image-preview');
 

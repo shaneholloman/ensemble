@@ -30,6 +30,8 @@ import { appendMessageWithImage, normalizeImageDataUrl, resizeAndSplitForOpenAI 
 import { DeltaBuffer, bufferDelta, flushBufferedDeltas } from '../utils/delta_buffer.js';
 import { createCitationTracker, formatCitation, generateFootnotes } from '../utils/citation_tracker.js';
 import { hasEventHandler } from '../utils/event_controller.js';
+import { createProviderErrorEvent } from '../utils/failure_detection.js';
+import { processSchemaForOpenAI } from '../utils/json_schema.js';
 import type { ResponseCreateParamsStreaming } from 'openai/resources/responses/responses.js';
 import type { WebSocket } from 'ws';
 
@@ -58,141 +60,6 @@ function requiresReasoning(modelName: string): boolean {
 }
 
 // Convert our tool definition to OpenAI's format
-/**
- * Process a JSON schema to make it compatible with OpenAI's requirements
- * This includes adding required fields, setting additionalProperties: false,
- * and removing unsupported keywords
- */
-function processSchemaForOpenAI(schema: any, originalProperties?: any): any {
-    // Clone schema to avoid modifying the original
-    const processedSchema = JSON.parse(JSON.stringify(schema));
-
-    // Recursively process the schema for OpenAI compatibility
-    const processSchemaRecursively = (schema: any) => {
-        if (!schema || typeof schema !== 'object') return;
-
-        // 1. Remove 'optional: true' flag
-        if (schema.optional === true) {
-            delete schema.optional;
-        }
-
-        // 2. Convert 'oneOf' to 'anyOf'
-        if (Array.isArray(schema.oneOf)) {
-            schema.anyOf = schema.oneOf;
-            delete schema.oneOf;
-        }
-
-        // 3. Remove OpenAI-incompatible validation keywords
-        const unsupportedKeywords = [
-            'minimum',
-            'maximum',
-            'minItems',
-            'maxItems',
-            'minLength',
-            'maxLength',
-            'pattern',
-            'format',
-            'multipleOf',
-            'patternProperties',
-            'unevaluatedProperties',
-            'propertyNames',
-            'minProperties',
-            'maxProperties',
-            'unevaluatedItems',
-            'contains',
-            'minContains',
-            'maxContains',
-            'uniqueItems',
-            'default', // Remove default values as OpenAI doesn't support them
-        ];
-        unsupportedKeywords.forEach(keyword => {
-            if (schema[keyword] !== undefined) {
-                delete schema[keyword];
-            }
-        });
-
-        // Detect if it's an object-like schema
-        const isObject = schema.type === 'object' || (schema.type === undefined && schema.properties !== undefined);
-
-        // 4. Recurse into nested structures first
-        // Process variants (anyOf, allOf)
-        for (const key of ['anyOf', 'allOf'] as const) {
-            if (Array.isArray(schema[key])) {
-                schema[key].forEach((variantSchema: any) => processSchemaRecursively(variantSchema));
-            }
-        }
-        // Process properties
-        if (isObject && schema.properties) {
-            for (const propName in schema.properties) {
-                processSchemaRecursively(schema.properties[propName]);
-            }
-        }
-        // Process array items
-        if (schema.type === 'array' && schema.items !== undefined) {
-            if (Array.isArray(schema.items)) {
-                // Tuple validation
-                schema.items.forEach((itemSchema: any) => processSchemaRecursively(itemSchema));
-            } else if (typeof schema.items === 'object') {
-                // Single schema for all items
-                processSchemaRecursively(schema.items);
-            }
-        }
-
-        // 5. AFTER recursion, process the current object level
-        if (isObject) {
-            // Always set additionalProperties: false for objects (required by OpenAI in strict mode)
-            // This is necessary even for objects without properties
-            schema.additionalProperties = false;
-
-            // Set 'required' array to include all current properties (required by OpenAI for strict mode)
-            if (schema.properties) {
-                const currentRequired = Object.keys(schema.properties);
-                // Only add required array if there are properties to require
-                if (currentRequired.length > 0) {
-                    schema.required = currentRequired;
-                } else {
-                    // If properties is an empty object {}, remove required
-                    delete schema.required;
-                }
-            } else {
-                // If no properties field, remove required
-                delete schema.required;
-            }
-        }
-    };
-
-    // Apply the recursive processing to the cloned schema
-    processSchemaRecursively(processedSchema);
-
-    // If original properties were provided (for tools), fix the top-level 'required' array
-    if (originalProperties) {
-        // AFTER recursion, fix the top-level 'required' array based on the ORIGINAL properties.
-        // This ensures top-level optional parameters are correctly handled, overriding the
-        // potentially stricter 'required' array set during recursion for the top-level object.
-        const topLevelRequired: string[] = [];
-        for (const propName in originalProperties) {
-            // Check the *original* property definition for the optional flag
-            if (!originalProperties[propName].optional) {
-                topLevelRequired.push(propName);
-            }
-        }
-        // Set the correct top-level required array on the processed schema
-        if (topLevelRequired.length > 0) {
-            processedSchema.required = topLevelRequired;
-        } else {
-            // Ensure the top-level object has no required array if no properties were originally required
-            delete processedSchema.required;
-        }
-    }
-
-    // Ensure top-level is object with additionalProperties: false if it has properties
-    if (processedSchema.properties && processedSchema.additionalProperties === undefined) {
-        processedSchema.additionalProperties = false;
-    }
-
-    return processedSchema;
-}
-
 /**
  * Resolves any async enum values in tool parameters
  */
@@ -256,7 +123,11 @@ async function convertToOpenAITools(requestParams: any, tools?: ToolFunction[] |
             // First resolve async enums, then process the schema
             const resolvedParams = await resolveAsyncEnums(tool.definition.function.parameters);
             const originalToolProperties = resolvedParams.properties;
-            const paramSchema = processSchemaForOpenAI(resolvedParams, originalToolProperties);
+            const paramSchema = processSchemaForOpenAI(
+                resolvedParams,
+                originalToolProperties,
+                originalToolProperties ? 'tool_parameters' : 'json_schema'
+            );
 
             return {
                 type: 'function',
@@ -1349,7 +1220,7 @@ export class OpenAIProvider extends BaseModelProvider {
                 requestParams.text = {
                     format: {
                         ...wrapperWithoutSchema, // name, type:'json_schema', etc.
-                        schema: processSchemaForOpenAI(schema),
+                        schema: processSchemaForOpenAI(schema, undefined, 'json_schema'),
                     },
                 };
             }
@@ -1388,7 +1259,9 @@ export class OpenAIProvider extends BaseModelProvider {
             const { waitWhilePaused } = await import('../utils/pause_controller.js');
             await waitWhilePaused(100, agent.abortSignal);
 
-            const stream = await this.client.responses.create(requestParams);
+            const stream = await this.client.responses.create(requestParams, {
+                signal: agent.abortSignal,
+            });
 
             // Track delta positions for each message_id
             // Track positions for messages and reasoning
@@ -1401,6 +1274,7 @@ export class OpenAIProvider extends BaseModelProvider {
             const citationTracker = createCitationTracker();
 
             const toolCallStates = new Map<string, ToolCall>();
+            let suppressIncompleteToolCallFailure = false;
 
             const events: ProviderStreamEvent[] = [];
             try {
@@ -1455,6 +1329,7 @@ export class OpenAIProvider extends BaseModelProvider {
                         yield {
                             type: 'error',
                             error: `OpenAI response  failed: [${errorInfo.code}] ${errorInfo.message}`,
+                            recoverable: false,
                         };
                     } else if (event.type === 'response.incomplete' && event.response?.incomplete_details) {
                         // Response finished but is incomplete (e.g., max_tokens hit)
@@ -1464,6 +1339,7 @@ export class OpenAIProvider extends BaseModelProvider {
                         yield {
                             type: 'error', // Or a more general 'response_incomplete'
                             error: 'OpenAI response incomplete: ' + reason,
+                            recoverable: false,
                         };
                     }
 
@@ -1599,6 +1475,7 @@ export class OpenAIProvider extends BaseModelProvider {
                         yield {
                             type: 'error',
                             error: 'OpenAI refusal error: ' + event.refusal,
+                            recoverable: false,
                         };
                     }
 
@@ -1709,6 +1586,7 @@ export class OpenAIProvider extends BaseModelProvider {
                         yield {
                             type: 'error',
                             error: `OpenAI API error (${model}): [${event.code || 'N/A'}] ${event.message}`,
+                            recoverable: false,
                         };
                     }
 
@@ -1721,23 +1599,33 @@ export class OpenAIProvider extends BaseModelProvider {
                 log_llm_error(requestId, streamError);
                 // Catch errors during stream iteration/processing
                 console.error('Error processing response stream:', streamError);
-                yield {
-                    type: 'error',
-                    error: `OpenAI stream request error (${model}): ${streamError}`,
-                };
+                const errorEvent = createProviderErrorEvent(streamError, {
+                    prefix: `OpenAI stream request error (${model}): `,
+                    request_id: requestId,
+                    reason: 'request_stream_failed',
+                    retryableErrors: agent.retryOptions?.additionalRetryableErrors,
+                    retryableStatusCodes: agent.retryOptions?.additionalRetryableStatusCodes,
+                });
+                suppressIncompleteToolCallFailure = errorEvent.recoverable === true;
+                yield errorEvent;
             } finally {
                 // Clean up: Check if any tool calls were started but not completed
                 if (toolCallStates.size > 0) {
                     console.warn(`Stream ended with ${toolCallStates.size} incomplete tool call(s).`);
-                    for (const [, toolCall] of toolCallStates.entries()) {
-                        // Optionally yield incomplete tool calls if appropriate for your application
-                        if (toolCall.function.name) {
-                            // Check if it was minimally valid
-                            yield {
-                                type: 'tool_start', // Or maybe 'tool_incomplete'?
-                                tool_call: toolCall as ToolCall,
-                            };
-                        }
+                    if (!suppressIncompleteToolCallFailure) {
+                        const incompleteToolNames = Array.from(toolCallStates.values())
+                            .map(toolCall => toolCall.function.name)
+                            .filter((name): name is string => typeof name === 'string' && name.length > 0);
+                        const errorMessage =
+                            incompleteToolNames.length > 0
+                                ? `OpenAI response ended with incomplete tool call arguments for: ${incompleteToolNames.join(', ')}`
+                                : 'OpenAI response ended with incomplete tool call arguments.';
+                        log_llm_error(requestId, errorMessage);
+                        yield {
+                            type: 'error',
+                            error: errorMessage,
+                            recoverable: false,
+                        };
                     }
                     toolCallStates.clear(); // Clear the map
                 }
@@ -1764,10 +1652,13 @@ export class OpenAIProvider extends BaseModelProvider {
         } catch (error) {
             log_llm_error(requestId, error);
             console.error('Error in OpenAI streaming response:', error);
-            yield {
-                type: 'error',
-                error: 'OpenAI streaming error: ' + (error instanceof Error ? error.stack : String(error)),
-            };
+            yield createProviderErrorEvent(error, {
+                prefix: 'OpenAI streaming error: ',
+                request_id: requestId,
+                reason: 'request_setup_failed',
+                retryableErrors: agent.retryOptions?.additionalRetryableErrors,
+                retryableStatusCodes: agent.retryOptions?.additionalRetryableStatusCodes,
+            });
         }
     }
 

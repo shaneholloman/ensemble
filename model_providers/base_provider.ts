@@ -22,7 +22,9 @@ export abstract class BaseModelProvider implements ModelProvider {
     ): AsyncGenerator<ProviderStreamEvent>;
 
     /**
-     * Create a response stream with automatic retry on network errors
+     * Create a response stream with provider-local retries.
+     * @deprecated Prefer the outer request lifecycle in `ensembleRequest`, but keep this
+     * compatibility wrapper for downstream providers extending the public base class.
      */
     async *createResponseStreamWithRetry(
         messages: ResponseInput,

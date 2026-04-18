@@ -1,194 +1,199 @@
-# Retry Behavior
+# Request Lifecycle and Retry Behavior
 
-Ensemble now includes automatic retry functionality for handling transient network errors and HTTP failures. This feature helps improve reliability when interacting with AI model providers.
+Ensemble now treats retries and terminal failure handling as an outer request-lifecycle concern instead of hiding them inside provider retry wrappers. That means one `ensembleRequest(...)` call has one authoritative outer status flow, even if multiple provider attempts happen underneath it.
 
-## Overview
+## Authoritative Lifecycle
 
-The retry mechanism automatically retries failed requests when:
-- Network errors occur (connection resets, timeouts, DNS failures)
-- Specific HTTP status codes are returned (429, 500, 502, 503, 504, etc.)
-- Provider-specific errors occur (e.g., "Incomplete JSON segment")
+The outer request lifecycle is surfaced through `operation_status` events:
 
-## Default Behavior
+- `started` means the outer request has begun
+- `retrying` means a recoverable failure happened and Ensemble is scheduling another attempt
+- `completed` is the only authoritative success outcome
+- `failed` is the only authoritative terminal failure outcome
 
-By default, Ensemble will:
-- Retry up to 3 times
-- Use exponential backoff starting at 1 second
-- Apply up to 10% jitter to prevent thundering herd
-- Maximum delay between retries is 30 seconds
+The outer lifecycle keeps the same `request_id` across `started`, `retrying`, `completed`, and `failed`. Individual provider rounds and `agent_done` events can use different inner request IDs.
 
-## Retryable Errors
+Typical recoverable sequence:
 
-### Network Errors
-- `ECONNRESET` - Connection reset by peer
-- `ETIMEDOUT` - Operation timed out
-- `ENOTFOUND` - DNS lookup failed
-- `ECONNREFUSED` - Connection refused
-- `EPIPE` - Broken pipe
-- `EHOSTUNREACH` - Host unreachable
-- `EAI_AGAIN` - DNS lookup timeout
-- `ENETUNREACH` - Network unreachable
-- `ECONNABORTED` - Connection aborted
-- `ESOCKETTIMEDOUT` - Socket timeout
+- `operation_status.started`
+- `error` with `recoverable: true`
+- `operation_status.retrying`
+- later `operation_status.completed` or `operation_status.failed`
 
-### HTTP Status Codes
-- `408` - Request Timeout
-- `429` - Too Many Requests
-- `500` - Internal Server Error
-- `502` - Bad Gateway
-- `503` - Service Unavailable
-- `504` - Gateway Timeout
-- `522` - Connection Timed Out
-- `524` - A Timeout Occurred
+Typical terminal sequence:
 
-### Provider-Specific Errors
-- Messages containing "fetch failed"
-- Messages containing "network error"
-- Messages containing "Incomplete JSON segment"
-- Messages containing "Connection error"
-- Messages containing "Request timeout"
+- `operation_status.started`
+- `error` with `recoverable: false`
+- `operation_status.failed`
 
-## Configuration
+Nested verifier requests do not emit their own authoritative outer terminal statuses into the parent stream. The parent request still emits exactly one outer `completed` or `failed`.
 
-You can customize retry behavior by providing `retryOptions` in your agent configuration:
+## Error Event Contract
+
+`error` events are still useful, but they are not the authoritative final outcome by themselves. They now carry more structured failure information:
+
+```ts
+type ErrorEvent = {
+    type: 'error';
+    error: string;
+    code?: string;
+    details?: unknown;
+    recoverable?: boolean;
+};
+```
+
+Use these fields as follows:
+
+- `error`: human-readable failure message
+- `code`: provider/network/app error code when available
+- `details`: raw provider details when available
+- `recoverable`: whether the outer lifecycle may retry this failure
+
+Recoverable errors can appear before a final success. If you need the final outcome, prefer terminal `operation_status` events or `ensembleResult(...)`.
+
+## Recoverable vs Terminal Failures
+
+Recoverability is normalized in the outer request lifecycle so providers and callers share the same semantics.
+
+Recoverable by default:
+
+- network transport failures like `ECONNRESET`, `ETIMEDOUT`, `ENOTFOUND`, `ECONNREFUSED`
+- retryable status codes like `408`, `429`, `500`, `502`, `503`, `504`, `522`, `524`
+- matching transient messages like `fetch failed`, `network error`, or `Incomplete JSON segment`
+- any custom codes/statuses added through `retryOptions.additionalRetryableErrors` or `retryOptions.additionalRetryableStatusCodes`
+
+Terminal by default:
+
+- aborts and whole-request timeouts
+- request setup failures such as model/provider resolution errors
+- malformed provider tool calls
+- truncated/stopped provider responses that are not classified as transient
+- strict structured-output schema validation failures
+- verification failures after the configured verification attempts
+- tool call limit and tool call round limit exhaustion
+- errors that happen after terminal output has already been emitted
+
+That last rule matters: if a provider already emitted terminal content and then drops the transport afterward, Ensemble does not retry and the final failure becomes terminal to avoid duplicating completed output.
+
+## Retry Configuration
+
+`retryOptions` configures outer retries only:
 
 ```typescript
 const agent = {
     model: 'gpt-4',
     retryOptions: {
-        // Maximum number of retry attempts (default: 3)
-        maxRetries: 5,
-        
-        // Initial delay in milliseconds before first retry (default: 1000)
-        initialDelay: 500,
-        
-        // Maximum delay in milliseconds between retries (default: 30000)
-        maxDelay: 60000,
-        
-        // Backoff multiplier for exponential backoff (default: 2)
-        backoffMultiplier: 1.5,
-        
-        // Additional error codes to consider retryable
-        additionalRetryableErrors: ['CUSTOM_ERROR'],
-        
-        // Additional HTTP status codes to consider retryable
-        additionalRetryableStatusCodes: [418], // I'm a teapot
-        
-        // Callback when a retry occurs
+        maxRetries: 2,
+        initialDelay: 1000,
+        maxDelay: 5000,
+        backoffMultiplier: 2,
         onRetry: (error, attempt) => {
-            console.log(`Retry attempt ${attempt} after error:`, error.message);
-        }
-    }
-};
-
-// Use with ensembleRequest
-for await (const event of ensembleRequest(messages, agent)) {
-    // Handle events
-}
-```
-
-## Disable Retries
-
-To disable retries entirely, set `maxRetries` to 0:
-
-```typescript
-const agent = {
-    model: 'gpt-4',
-    retryOptions: {
-        maxRetries: 0
-    }
+            console.log(`Retry ${attempt}:`, error.message ?? error);
+        },
+    },
 };
 ```
 
-## Exponential Backoff
+- `maxRetries`: maximum retries after the initial request. Default: `4`
+- `initialDelay`: delay before the first retry. Default: `1000ms`
+- `maxDelay`: upper bound for retry delay growth. Default: `30000ms`
+- `backoffMultiplier`: exponential backoff multiplier. Default: `2`
+- `additionalRetryableErrors`: extra transient error codes
+- `additionalRetryableStatusCodes`: extra transient status codes
+- `onRetry(error, attempt)`: callback when the outer lifecycle schedules retry `attempt`
 
-The retry delay follows an exponential backoff pattern:
-- 1st retry: ~1 second
-- 2nd retry: ~2 seconds
-- 3rd retry: ~4 seconds
-- And so on...
+Set `maxRetries: 0` to disable retries entirely.
 
-Each delay includes a random jitter of ±10% to prevent multiple clients from retrying at exactly the same time.
+Ensemble calls providers through `createResponseStream(...)` directly. The older provider-local `createResponseStreamWithRetry(...)` path remains only as a deprecated compatibility wrapper for downstream providers extending the public base class.
 
-## Streaming Behavior
+## Whole-Request Timeout and Abort Behavior
 
-For streaming responses:
-- Retries only occur if the error happens before any data has been yielded
-- Once streaming begins, errors will not trigger retries to maintain stream integrity
-- This ensures partial responses are not duplicated
+`modelSettings.timeout_ms` is a whole outer-request timeout budget, not a per-attempt timeout. The same budget applies across:
 
-## Example: Handling Network Failures
+- the initial provider attempt
+- any retries
+- waiting for started tools to finish
+- bounded failure finalization
+
+If the budget expires, the outer request fails terminally and the provider abort signal is triggered. A user-supplied `abortSignal` is treated the same way: it propagates into the provider request and active tool execution, and the final failure is terminal.
+
+## Tool Behavior During Failure Handling
+
+Tool execution now participates directly in request failure handling:
+
+- Started tools are allowed to finish before a recoverable retry begins
+- On terminal request failure, Ensemble switches into bounded tool finalization
+- Abort-aware tools receive an abort signal so they can stop quickly
+- Queued sequential tools are not started once the request is already terminal
+- If a non-abortable tool never settles, Ensemble can stop waiting and leave it tracked as still running instead of pretending it completed
+
+This makes failures visible instead of hiding them behind fallbacks or synthetic success states.
+
+## Structured Output and Verification
+
+Prefer `modelSettings.json_schema` as the authoritative structured-output contract. The older `jsonSchema` agent property is still accepted as a compatibility alias and mapped onto `modelSettings.json_schema`.
+
+When `json_schema.strict === true`:
+
+- the final text response is validated by the outer request lifecycle
+- validation failures are terminal with reason `structured_output_validation_failed`
+- schema constraints like `exclusiveMinimum` and `exclusiveMaximum` are enforced
+
+Verifier behavior also changed:
+
+- verifier calls are forced onto a strict JSON schema of `{ status: "pass" | "fail", reason?: string }`
+- invalid verifier JSON/schema output is treated as verifier failure, not ignored
+- if verification fails and retries are allowed, Ensemble reruns the main request with verifier feedback
+- if verification still fails after the configured attempts, the outer request fails terminally with reason `verification_failed`
+
+## `ensembleResult(...)` Semantics
+
+`ensembleResult(...)` now follows the outer lifecycle instead of treating the first error as final.
+
+It exposes:
+
+- `requestStatus`: outer request status (`started`, `retrying`, `failed`, `completed`)
+- `failure`: final failure details `{ error, reason?, recoverable? }`
+- `completed`: true only when the authoritative outer outcome is success
+
+Behavioral rules:
+
+- a terminal outer `completed` status clears earlier recoverable errors
+- a terminal outer `failed` status is the final failure outcome
+- if the stream ends without an authoritative terminal status, `ensembleResult(...)` falls back to the raw stream outcome
+- `failFast: true` still waits for the authoritative failed request status before stopping, so callers receive the final normalized failure reason
+
+## Example
 
 ```typescript
-import { ensembleRequest } from '@just-every/ensemble';
+import { ensembleRequest, ensembleResult } from '@just-every/ensemble';
 
-const messages = [
-    { type: 'message', role: 'user', content: 'Hello!' }
-];
-
+const messages = [{ type: 'message', role: 'user', content: 'Hello!' }];
 const agent = {
     model: 'claude-3-5-haiku-latest',
+    modelSettings: {
+        timeout_ms: 15000,
+    },
     retryOptions: {
-        maxRetries: 5,
+        maxRetries: 1,
         onRetry: (error, attempt) => {
-            console.log(`Network error on attempt ${attempt}:`, error.code);
-        }
-    }
+            console.log(`Retry ${attempt}`, error.code ?? error.message);
+        },
+    },
 };
 
-try {
-    for await (const event of ensembleRequest(messages, agent)) {
-        if (event.type === 'message_delta') {
-            process.stdout.write(event.content);
-        }
+for await (const event of ensembleRequest(messages, agent)) {
+    if (event.type === 'operation_status') {
+        console.log('status', event.status, event.reason, event.attempt, event.max_attempts);
     }
-} catch (error) {
-    // This will only be thrown after all retries are exhausted
-    console.error('Failed after all retries:', error);
+
+    if (event.type === 'error') {
+        console.log('error', event.recoverable ? 'recoverable' : 'terminal', event.code, event.error);
+    }
+}
+
+const result = await ensembleResult(ensembleRequest(messages, agent), { failFast: true });
+if (!result.completed) {
+    console.error(result.requestStatus, result.failure?.reason, result.failure?.error);
 }
 ```
-
-## Example: Custom Retry Logic
-
-```typescript
-const agent = {
-    model: 'gpt-4',
-    retryOptions: {
-        // Retry more aggressively for critical operations
-        maxRetries: 10,
-        initialDelay: 200,
-        backoffMultiplier: 1.5,
-        
-        // Add custom error codes
-        additionalRetryableErrors: ['MYAPP_TIMEOUT'],
-        
-        // Track retries
-        onRetry: async (error, attempt) => {
-            await logRetryToDatabase({
-                error: error.message,
-                attempt,
-                timestamp: new Date()
-            });
-        }
-    }
-};
-```
-
-## Best Practices
-
-1. **Use appropriate retry counts**: For user-facing operations, 3-5 retries is usually sufficient. For background jobs, you might use more.
-
-2. **Monitor retry callbacks**: Use the `onRetry` callback to track retry patterns and identify systemic issues.
-
-3. **Consider timeout implications**: Each retry adds to total request time. Ensure your application timeouts account for retries.
-
-4. **Handle non-retryable errors**: Some errors (like authentication failures) should not be retried. These will fail immediately.
-
-5. **Test retry behavior**: Use network simulation tools to test how your application behaves under poor network conditions.
-
-## Implementation Details
-
-- Retry logic is implemented in the `BaseModelProvider` class
-- All providers that extend `BaseModelProvider` automatically get retry functionality
-- The retry handler uses a separate utility module for easy testing and maintenance
-- Retries preserve the full request context including messages, model settings, and tools

@@ -16,6 +16,7 @@ npm run demo
 This opens a unified demo interface at http://localhost:3000 with all demos:
 
 ### Demo Interface
+
 ![Ensemble Demos Interface](demo/screenshots/demo-overview.png)
 
 Navigate to http://localhost:3000 to access all demos through a unified interface.
@@ -35,12 +36,13 @@ See the [demo README](demo/README.md) for detailed information about each demo.
 - 🎯 **Smart Result Processing** - Automatic summarization and truncation for long outputs
 
 ## Model Updates (Dec 2025)
+
 - OpenAI: Added GPT-5.2 (base + chat-latest + pro) and refreshed GPT-5.1/GPT-5/Codex pricing
 - Anthropic: Claude 4.5 (Sonnet/Haiku, incl. 1M context) and Claude Opus 4.1
 - Google: Gemini 3 (Pro/Flash/Ultra) and refreshed Gemini 2.5 pricing incl. image/TTS/native-audio
 - xAI: Grok 4.1 Fast and Grok 4 Fast with tiered pricing; updated Grok 4/3/mini variants plus Grok Imagine image generation/editing support (`grok-imagine-image`, `grok-imagine-image-pro`)
 
-*Codex-Max pricing reflects current published rates and may change if OpenAI updates pricing.
+\*Codex-Max pricing reflects current published rates and may change if OpenAI updates pricing.
 
 ## Installation
 
@@ -61,13 +63,13 @@ Available API keys (add only the ones you need):
 ```bash
 # LLM Providers
 OPENAI_API_KEY=your-openai-key
-ANTHROPIC_API_KEY=your-anthropic-key  
+ANTHROPIC_API_KEY=your-anthropic-key
 GOOGLE_API_KEY=your-google-key
 XAI_API_KEY=your-xai-key
 DEEPSEEK_API_KEY=your-deepseek-key
 OPENROUTER_API_KEY=your-openrouter-key
 
-# Voice & Audio Providers  
+# Voice & Audio Providers
 ELEVENLABS_API_KEY=your-elevenlabs-key
 
 # Search Providers
@@ -81,9 +83,7 @@ BRAVE_API_KEY=your-brave-key
 ```typescript
 import { ensembleRequest, ensembleResult } from '@just-every/ensemble';
 
-const messages = [
-    { type: 'message', role: 'user', content: 'How many of the letter "e" is there in "Ensemble"?' }
-];
+const messages = [{ type: 'message', role: 'user', content: 'How many of the letter "e" is there in "Ensemble"?' }];
 
 // Perform initial request
 for await (const event of ensembleRequest(messages)) {
@@ -104,21 +104,22 @@ const stream = ensembleRequest(messages, validatorAgent);
 const result = await ensembleResult(stream);
 console.log('Validation Result:', {
     message: result.message,
+    requestStatus: result.requestStatus,
+    failure: result.failure,
     cost: result.cost,
     completed: result.completed,
-    duration: result.endTime
-        ? result.endTime.getTime() - result.startTime.getTime()
-        : 0,
+    duration: result.endTime ? result.endTime.getTime() - result.startTime.getTime() : 0,
     messageIds: Array.from(result.messageIds),
 });
 ```
 
 ## Documentation
 
+- [Request Lifecycle & Failures](docs/retry-behavior.md) - Outer request status, retries, timeouts, verification, and failure handling
 - [Tool Execution Guide](docs/tool-execution.md) - Advanced tool calling features
 - [Interactive Demos](demo/) - Web-based demos for core features
 - Generated [API Reference](docs/api) with `npm run docs`
-  
+
 Run `npm run docs` to regenerate the HTML documentation.
 
 ## Core Concepts
@@ -130,25 +131,27 @@ Define tools that LLMs can call:
 ```typescript
 const agent = {
     model: 'o3',
-    tools: [{
-        definition: {
-            type: 'function',
-            function: {
-                name: 'get_weather',
-                description: 'Get weather for a location',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        location: { type: 'string' }
+    tools: [
+        {
+            definition: {
+                type: 'function',
+                function: {
+                    name: 'get_weather',
+                    description: 'Get weather for a location',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            location: { type: 'string' },
+                        },
+                        required: ['location'],
                     },
-                    required: ['location']
-                }
-            }
+                },
+            },
+            function: async (location: string) => {
+                return `Weather in ${location}: Sunny, 72°F`;
+            },
         },
-        function: async (location: string) => {
-            return `Weather in ${location}: Sunny, 72°F`;
-        }
-    }]
+    ],
 };
 ```
 
@@ -159,7 +162,8 @@ All providers emit standardized events:
 - `message_start` / `message_delta` / `message_complete` - Message streaming
 - `tool_start` / `tool_delta` / `tool_done` - Tool execution
 - `cost_update` - Token usage and cost tracking
-- `error` - Error handling
+- `operation_status` - Authoritative outer request lifecycle (`started`, `retrying`, `completed`, `failed`)
+- `error` - Failure details for the current request round (`error`, `code`, `details`, `recoverable`)
 
 ### Agent Configuration
 
@@ -179,15 +183,19 @@ const agent = {
 ```
 
 Key configuration options:
+
 - `maxToolCalls` - Limits the total number of tool calls across all rounds
 - `maxToolCallRoundsPerTurn` - Limits sequential rounds where each round can have multiple parallel tool calls
 - `modelSettings` - Provider-specific parameters like temperature, max_tokens, etc.
+- `modelSettings.timeout_ms` - Whole outer-request timeout budget shared across retries and tool completion
+- `retryOptions` - Outer retry/backoff policy for recoverable request failures
 
 ### Multimodal Input (Images)
 
 For multimodal models, pass content as an array of typed parts. In addition to `input_text` and `input_image`, Ensemble now accepts a simpler `image` part that can take base64 data or a URL.
 
 Supported image fields:
+
 - `type: 'image'`
 - `data`: base64 string **or** full `data:<mime>;base64,...` URL
 - `url`: http(s) URL
@@ -199,27 +207,29 @@ Supported image fields:
 import { ensembleRequest } from '@just-every/ensemble';
 
 const messages = [
-  {
-    type: 'message',
-    role: 'user',
-    content: [
-      { type: 'input_text', text: 'Describe this image.' },
-      { type: 'image', data: myPngBase64, mime_type: 'image/png' }
-      // or: { type: 'image', url: 'https://example.com/cat.png' }
-    ],
-  },
+    {
+        type: 'message',
+        role: 'user',
+        content: [
+            { type: 'input_text', text: 'Describe this image.' },
+            { type: 'image', data: myPngBase64, mime_type: 'image/png' },
+            // or: { type: 'image', url: 'https://example.com/cat.png' }
+        ],
+    },
 ];
 
 for await (const event of ensembleRequest(messages, { model: 'gemini-3-flash-preview' })) {
-  if (event.type === 'message_complete' && 'content' in event) {
-    console.log(event.content);
-  }
+    if (event.type === 'message_complete' && 'content' in event) {
+        console.log(event.content);
+    }
 }
 ```
 
 ### Structured JSON Output
 
-Use `modelSettings.json_schema` to request a JSON-only response. The schema is validated by providers that support it.
+Use `modelSettings.json_schema` to request a JSON-only response. Ensemble treats this as the authoritative structured-output contract. When `strict: true` is enabled, the final response is validated by the outer request lifecycle and invalid JSON/schema violations fail the request instead of silently completing.
+
+Prefer `modelSettings.json_schema`. The older `jsonSchema` agent property is still accepted as a compatibility alias and is mapped onto `modelSettings.json_schema`.
 
 The example below combines **image input** with **JSON output**:
 
@@ -227,38 +237,72 @@ The example below combines **image input** with **JSON output**:
 import { ensembleRequest, ensembleResult } from '@just-every/ensemble';
 
 const agent = {
-  model: 'gemini-3-flash-preview',
-  modelSettings: {
-    temperature: 0.2,
-    json_schema: {
-      name: 'image_analysis',
-      type: 'json_schema',
-      schema: {
-        type: 'object',
-        properties: {
-          dominant_color: { type: 'string' },
-          confidence: { type: 'number' },
+    model: 'gemini-3-flash-preview',
+    modelSettings: {
+        temperature: 0.2,
+        json_schema: {
+            name: 'image_analysis',
+            type: 'json_schema',
+            schema: {
+                type: 'object',
+                properties: {
+                    dominant_color: { type: 'string' },
+                    confidence: { type: 'number' },
+                },
+                required: ['dominant_color', 'confidence'],
+            },
         },
-        required: ['dominant_color', 'confidence'],
-      },
     },
-  },
 };
 
 const messages = [
-  {
-    type: 'message',
-    role: 'user',
-    content: [
-      { type: 'input_text', text: 'Analyze this image and return JSON.' },
-      { type: 'image', data: myPngBase64, mime_type: 'image/png' },
-    ],
-  },
+    {
+        type: 'message',
+        role: 'user',
+        content: [
+            { type: 'input_text', text: 'Analyze this image and return JSON.' },
+            { type: 'image', data: myPngBase64, mime_type: 'image/png' },
+        ],
+    },
 ];
 
 const result = await ensembleResult(ensembleRequest(messages, agent));
+if (!result.completed) {
+    throw new Error(result.failure?.error || 'Request failed');
+}
 const parsed = JSON.parse(result.message);
 console.log(parsed.dominant_color, parsed.confidence);
+```
+
+`ensembleResult(...)` also exposes `requestStatus` and `failure`, so callers can distinguish the final outer request outcome from earlier recoverable errors in the stream.
+
+### Request Lifecycle
+
+`operation_status` is the authoritative outer lifecycle for one `ensembleRequest(...)` call:
+
+- `started` is emitted once when the outer request begins
+- `retrying` is emitted after a recoverable failure and before the next attempt
+- `completed` is the only authoritative success outcome
+- `failed` is the only authoritative terminal failure outcome
+
+Recoverable `error` events can appear before a successful `completed` status. Callers that want the final outcome should prefer `operation_status` or `ensembleResult(...)` over treating the first `error` event as terminal.
+
+```ts
+const stream = ensembleRequest(messages, {
+    model: 'claude-4-sonnet',
+    modelSettings: { timeout_ms: 15_000 },
+    retryOptions: { maxRetries: 1 },
+});
+
+for await (const event of stream) {
+    if (event.type === 'operation_status') {
+        console.log(event.status, event.reason, event.attempt, event.max_attempts);
+    }
+
+    if (event.type === 'error') {
+        console.log(event.recoverable ? 'recoverable' : 'terminal', event.code, event.error);
+    }
+}
 ```
 
 ### Advanced Features
@@ -278,21 +322,25 @@ import { ensembleVoice, ensembleVoice } from '@just-every/ensemble';
 
 // Simple voice generation
 const audioData = await ensembleVoice('Hello, world!', {
-    model: 'tts-1' // or 'gemini-2.5-flash-preview-tts'
+    model: 'tts-1', // or 'gemini-2.5-flash-preview-tts'
 });
 
 // Voice generation with options
-const audioData = await ensembleVoice('Welcome to our service', {
-    model: 'tts-1-hd'
-}, {
-    voice: 'nova',        // Voice selection
-    speed: 1.2,          // Speech speed (0.25-4.0)
-    response_format: 'mp3' // Audio format
-});
+const audioData = await ensembleVoice(
+    'Welcome to our service',
+    {
+        model: 'tts-1-hd',
+    },
+    {
+        voice: 'nova', // Voice selection
+        speed: 1.2, // Speech speed (0.25-4.0)
+        response_format: 'mp3', // Audio format
+    }
+);
 
 // Streaming voice generation
 for await (const event of ensembleVoice('Long text...', {
-    model: 'gemini-2.5-pro-preview-tts'
+    model: 'gemini-2.5-pro-preview-tts',
 })) {
     if (event.type === 'audio_stream') {
         // Process audio chunk
@@ -302,6 +350,7 @@ for await (const event of ensembleVoice('Long text...', {
 ```
 
 **Supported Voice Models:**
+
 - OpenAI: `tts-1`, `tts-1-hd`
 - Google Gemini: `gemini-2.5-flash-preview-tts`, `gemini-2.5-pro-preview-tts`
 
@@ -312,30 +361,35 @@ Use OpenAI GPT-Image-1 (or the new cost-efficient GPT-Image-1 Mini) or Google Ge
 ```ts
 import { ensembleImage } from '@just-every/ensemble';
 
-const images = await ensembleImage('A serene lake at dawn', { model: 'gemini-2.5-flash-image-preview' }, { size: 'portrait' });
+const images = await ensembleImage(
+    'A serene lake at dawn',
+    { model: 'gemini-2.5-flash-image-preview' },
+    { size: 'portrait' }
+);
 
 // Gemini 3.1 Flash Image: grounded generation + thinking controls + metadata callback
 const grounded = await ensembleImage(
-  'A detailed painting of a Timareta butterfly resting on a flower',
-  { model: 'gemini-3.1-flash-image-preview' },
-  {
-    size: '16:9',
-    quality: 'high', // 4K
-    grounding: {
-      web_search: true,
-      image_search: true,
-    },
-    thinking: {
-      level: 'high',
-      include_thoughts: true,
-    },
-    on_metadata: metadata => {
-      // metadata.citations includes containing-page URLs for attribution compliance
-      console.log(metadata.citations);
-    },
-  }
+    'A detailed painting of a Timareta butterfly resting on a flower',
+    { model: 'gemini-3.1-flash-image-preview' },
+    {
+        size: '16:9',
+        quality: 'high', // 4K
+        grounding: {
+            web_search: true,
+            image_search: true,
+        },
+        thinking: {
+            level: 'high',
+            include_thoughts: true,
+        },
+        on_metadata: metadata => {
+            // metadata.citations includes containing-page URLs for attribution compliance
+            console.log(metadata.citations);
+        },
+    }
 );
 ```
+
 - ElevenLabs: `eleven_multilingual_v2`, `eleven_turbo_v2_5`
 
 ## Development
@@ -360,12 +414,14 @@ npm run lint
 Additional image providers
 
 New providers added
+
 - Fireworks AI (FLUX family: Kontext/Pro/Schnell) – async APIs with result polling. Docs: Fireworks Image API.
 - Stability AI (Stable Image Ultra/SDXL) – REST v2beta endpoints supporting text-to-image and image-to-image.
 - Runway Gen-4 Image – via FAL.ai.
 - Recraft v3 – via FAL.ai (supports text-to-vector and vector-style outputs).
 
 Environment
+
 ```
 FIREWORKS_API_KEY=your_key
 STABILITY_API_KEY=your_key
@@ -373,6 +429,7 @@ FAL_KEY=your_key
 ```
 
 Fallbacks
+
 - If Fireworks returns 401/403 or is not configured, requests for Flux-family models automatically fall back to FAL.ai equivalents when `FAL_KEY` is set.
 
 - Luma Photon (official): set `LUMA_API_KEY` and use `luma-photon-1` or `luma-photon-flash-1`.
@@ -380,6 +437,7 @@ Fallbacks
 - Midjourney v7 (3rd-party): set `MIDJOURNEY_API_KEY` (or `KIE_API_KEY`) and optional `MJ_API_BASE`; use `midjourney-v7`.
 
 Notes
+
 - Gemini 3.1 Flash Image supports 0.5K/1K/2K/4K tiers, explicit aspect ratios, Google Image Search grounding, and thinking controls.
 - Gemini 3 Pro Image supports explicit 1K/2K/4K resolution presets mapped to official aspect-ratio tables.
 - Luma Photon and Ideogram return URLs; we pass them through without altering pixels.
@@ -406,16 +464,19 @@ Contributions are welcome! Please:
 ## Troubleshooting
 
 ### Provider Issues
+
 - Ensure API keys are set correctly
 - Check rate limits for your provider
 - Verify model names match provider expectations
 
 ### Tool Calling
+
 - Tools must follow the OpenAI function schema
 - Ensure tool functions are async
 - Check timeout settings for long-running tools
 
 ### Streaming Issues
+
 - Verify network connectivity
 - Check for provider-specific errors in events
 - Enable debug logging with `DEBUG=ensemble:*`

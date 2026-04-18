@@ -5,11 +5,11 @@
 import {
     ResponseInput,
     AgentDefinition,
-    ResponseJSONSchema,
     ResponseOutputMessage,
     ResponseInputMessage,
     ProviderStreamEvent,
 } from '../types/types.js';
+import { validateJsonResponseContent } from './json_schema.js';
 
 export interface VerificationResult {
     status: 'pass' | 'fail';
@@ -37,6 +37,16 @@ export async function verifyOutput(
     output: string,
     originalMessages: ResponseInput
 ): Promise<VerificationResult> {
+    const verificationSchema = {
+        type: 'object',
+        properties: {
+            status: { type: 'string', enum: ['pass', 'fail'] },
+            reason: { type: 'string' },
+        },
+        required: ['status'],
+        additionalProperties: false,
+    } as const;
+
     const verificationPrompt = `Please verify if the following output is correct and complete:
 
 ${output}
@@ -61,18 +71,15 @@ Respond with JSON: {"status": "pass"} or {"status": "fail", "reason": "explanati
     // Create a verifier with JSON schema enforcement
     const verifierWithSchema: AgentDefinition = {
         ...verifier,
-        jsonSchema: {
-            type: 'json_schema',
-            name: 'verification_result',
-            schema: {
-                type: 'object',
-                properties: {
-                    status: { type: 'string', enum: ['pass', 'fail'] },
-                    reason: { type: 'string' },
-                },
-                required: ['status'],
+        modelSettings: {
+            ...verifier.modelSettings,
+            json_schema: {
+                type: 'json_schema',
+                name: 'verification_result',
+                strict: true,
+                schema: verificationSchema,
             },
-        } as ResponseJSONSchema,
+        },
     };
 
     if (!ensembleRequestFunction) {
@@ -89,14 +96,20 @@ Respond with JSON: {"status": "pass"} or {"status": "fail", "reason": "explanati
             }
         }
 
-        // Parse the JSON response
-        const jsonResponse = JSON.parse(fullResponse);
-        return jsonResponse;
+        const validation = validateJsonResponseContent(fullResponse, verificationSchema);
+        if ('error' in validation) {
+            return {
+                status: 'fail',
+                reason: validation.error,
+            };
+        }
+
+        return validation.value as VerificationResult;
     } catch (error) {
         console.error('Verification failed:', error);
         return {
             status: 'fail',
-            reason: 'Invalid verification response',
+            reason: error instanceof Error ? error.message : 'Invalid verification response',
         };
     }
 }

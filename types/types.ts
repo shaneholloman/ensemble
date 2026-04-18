@@ -26,6 +26,8 @@ export interface ToolParameter {
     default?: unknown;
     minimum?: number;
     maximum?: number;
+    exclusiveMinimum?: number;
+    exclusiveMaximum?: number;
     minLength?: number;
     maxLength?: number;
     pattern?: string;
@@ -102,6 +104,7 @@ export interface ModelSettings {
     top_p?: number;
     top_k?: number;
     max_tokens?: number;
+    timeout_ms?: number; // Whole-request timeout override used by request lifecycle guards
     stop_sequence?: string;
     seed?: number;
     /** Generic thinking budget in provider-specific units (provider implementations interpret this). */
@@ -300,6 +303,7 @@ export type StreamEventType =
     | 'design_grid'
     | 'console'
     | 'error'
+    | 'operation_status'
     | 'response_output'
     // New types for waiting on tools
     | 'tool_wait_start'
@@ -377,6 +381,25 @@ export interface ToolEvent extends StreamEventBase {
 export interface ErrorEvent extends StreamEventBase {
     type: 'error';
     error: string;
+    code?: string;
+    details?: unknown;
+    recoverable?: boolean;
+}
+
+/**
+ * Operation lifecycle event used to surface authoritative retry/failure status.
+ */
+export interface OperationStatusEvent extends StreamEventBase {
+    type: 'operation_status';
+    operation: 'request' | 'image' | 'result';
+    status: 'started' | 'retrying' | 'failed' | 'completed';
+    error?: string;
+    reason?: string;
+    recoverable?: boolean;
+    terminal?: boolean;
+    will_continue?: boolean;
+    attempt?: number;
+    max_attempts?: number;
 }
 
 /**
@@ -450,6 +473,7 @@ export type ProviderStreamEvent =
     | FileEvent
     | ToolEvent
     | ErrorEvent
+    | OperationStatusEvent
     | CostUpdateEvent
     | ResponseOutputEvent
     | AgentEvent;
@@ -1076,7 +1100,7 @@ export interface AgentDefinition {
     verifier?: AgentDefinition;
     maxVerificationAttempts?: number;
     args?: any;
-    jsonSchema?: ResponseJSONSchema; // JSON schema for structured output
+    jsonSchema?: ResponseJSONSchema; // Deprecated compatibility alias for modelSettings.json_schema
     historyThread?: ResponseInput | undefined;
     cwd?: string; // Working directory for the agent (used by model providers that need a real shell)
     modelScores?: Record<string, number>; // Model-specific scores for weighted selection (0-100)
@@ -1109,21 +1133,21 @@ export interface AgentDefinition {
     /** Optional abort signal to cancel operations */
     abortSignal?: AbortSignal;
 
-    /** Optional retry configuration for handling network errors and transient failures */
+    /** Optional retry configuration for outer request retries after recoverable failures */
     retryOptions?: {
-        /** Maximum number of retry attempts (default: 3) */
+        /** Maximum number of outer retry attempts after the initial request (default: 4) */
         maxRetries?: number;
-        /** Initial delay in milliseconds before first retry (default: 1000) */
+        /** Initial delay in milliseconds before the first outer retry (default: 1000) */
         initialDelay?: number;
-        /** Maximum delay in milliseconds between retries (default: 30000) */
+        /** Maximum delay in milliseconds between outer retries (default: 30000) */
         maxDelay?: number;
-        /** Backoff multiplier for exponential backoff (default: 2) */
+        /** Backoff multiplier for outer retry delays (default: 2) */
         backoffMultiplier?: number;
-        /** Additional error codes to consider retryable */
+        /** Additional transient error codes that should be treated as retryable */
         additionalRetryableErrors?: string[];
-        /** Additional HTTP status codes to consider retryable */
+        /** Additional transient HTTP/API status codes that should be treated as retryable */
         additionalRetryableStatusCodes?: number[];
-        /** Callback when a retry occurs */
+        /** Callback when the outer lifecycle schedules a retry */
         onRetry?: (error: any, attempt: number) => void;
     };
 }
