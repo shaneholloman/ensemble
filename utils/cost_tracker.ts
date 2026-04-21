@@ -76,16 +76,24 @@ class CostTracker {
         const calculationTime = usage.timestamp || new Date();
 
         // Check if any cost component uses time-based pricing
+        const hasTimeBasedPricing = (
+            costStructure: number | TieredPrice | TimeBasedPrice | ModalityPrice | undefined
+        ): boolean => {
+            if (!costStructure || typeof costStructure !== 'object') return false;
+            if ('peak_price_per_million' in costStructure) return true;
+            if ('text' in costStructure || 'audio' in costStructure || 'video' in costStructure || 'image' in costStructure) {
+                const modalityPrice = costStructure as ModalityPrice;
+                return ['text', 'audio', 'video', 'image'].some(modality =>
+                    hasTimeBasedPricing(modalityPrice[modality as keyof ModalityPrice])
+                );
+            }
+            return false;
+        };
+
         const usesTimeBasedPricing =
-            (typeof model.cost?.input_per_million === 'object' &&
-                model.cost.input_per_million !== null &&
-                'peak_price_per_million' in model.cost.input_per_million) ||
-            (typeof model.cost?.output_per_million === 'object' &&
-                model.cost.output_per_million !== null &&
-                'peak_price_per_million' in model.cost.output_per_million) ||
-            (typeof model.cost?.cached_input_per_million === 'object' &&
-                model.cost.cached_input_per_million !== null &&
-                'peak_price_per_million' in model.cost.cached_input_per_million);
+            hasTimeBasedPricing(model.cost?.input_per_million) ||
+            hasTimeBasedPricing(model.cost?.output_per_million) ||
+            hasTimeBasedPricing(model.cost?.cached_input_per_million);
 
         if (!usage.timestamp && usesTimeBasedPricing) {
             // Silently default to current time for calculation
@@ -180,7 +188,11 @@ class CostTracker {
 
         // Calculate Cached Token Cost (If applicable and cost defined)
         if (actualCachedTokens > 0 && model.cost?.cached_input_per_million !== undefined) {
-            const cachedPricePerMillion = getPrice(actualCachedTokens, model.cost.cached_input_per_million);
+            const cachedPricePerMillion = getPrice(
+                actualCachedTokens,
+                model.cost.cached_input_per_million,
+                usage.input_modality
+            );
             usage.cost += (actualCachedTokens / 1000000) * cachedPricePerMillion;
         }
 

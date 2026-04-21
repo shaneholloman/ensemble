@@ -658,7 +658,7 @@ export interface ModelCost {
     // Cost components can be flat rate, token-tiered, time-based, or modality-specific
     input_per_million?: number | TieredPrice | TimeBasedPrice | ModalityPrice;
     output_per_million?: number | TieredPrice | TimeBasedPrice | ModalityPrice;
-    cached_input_per_million?: number | TieredPrice | TimeBasedPrice;
+    cached_input_per_million?: number | TieredPrice | TimeBasedPrice | ModalityPrice;
 
     // Cost per image (for image generation models like Imagen)
     per_image?: number;
@@ -889,7 +889,7 @@ export interface ImageGenerationOpts {
     resolution?: '1k' | '2k';
 
     /** Quality of the generated image */
-    quality?: 'standard' | 'hd' | 'low' | 'medium' | 'high';
+    quality?: 'standard' | 'hd' | 'low' | 'medium' | 'high' | 'auto';
 
     /** Style of the generated image (OpenAI specific) */
     style?: 'vivid' | 'natural';

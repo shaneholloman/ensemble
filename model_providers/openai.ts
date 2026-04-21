@@ -32,6 +32,13 @@ import { createCitationTracker, formatCitation, generateFootnotes } from '../uti
 import { hasEventHandler } from '../utils/event_controller.js';
 import { createProviderErrorEvent } from '../utils/failure_detection.js';
 import { processSchemaForOpenAI } from '../utils/json_schema.js';
+import {
+    getOpenAIImageCostMetadata,
+    buildOpenAIImageUsageRecord,
+    getOpenAIImageCostEstimate,
+    normalizeOpenAIImageQuality,
+    normalizeOpenAIImageSize,
+} from './openai_image_pricing.js';
 import type { ResponseCreateParamsStreaming } from 'openai/resources/responses/responses.js';
 import type { WebSocket } from 'ws';
 
@@ -397,23 +404,8 @@ export class OpenAIProvider extends BaseModelProvider {
             model = model || 'gpt-image-1.5';
             const number_of_images = opts?.n || 1;
 
-            // Map quality options
-            let quality: 'low' | 'medium' | 'high' | 'auto' = 'auto';
-            if (opts?.quality === 'standard') quality = 'medium';
-            else if (opts?.quality === 'hd') quality = 'high';
-            else if (opts?.quality === 'low' || opts?.quality === 'medium' || opts?.quality === 'high') {
-                quality = opts.quality;
-            }
-
-            // Map size options
-            let size: '1024x1024' | '1536x1024' | '1024x1536' | 'auto' = 'auto';
-            if (opts?.size === 'square' || opts?.size === '1024x1024') {
-                size = '1024x1024';
-            } else if (opts?.size === 'landscape' || opts?.size === '1536x1024') {
-                size = '1536x1024';
-            } else if (opts?.size === 'portrait' || opts?.size === '1024x1536') {
-                size = '1024x1536';
-            }
+            const quality = normalizeOpenAIImageQuality(opts?.quality);
+            const size = normalizeOpenAIImageSize(model, opts?.size);
 
             // Default background to 'auto'
             const background: 'transparent' | 'opaque' | 'auto' = opts?.background || 'auto';
@@ -582,23 +574,37 @@ export class OpenAIProvider extends BaseModelProvider {
                 response = await this.client.images.generate(generateParams);
             }
 
-            // Track usage for cost calculation — use provider-derived cost (quality + size)
+            // Track usage for cost calculation. Prefer token usage returned by OpenAI;
+            // otherwise use published or size-derived estimates.
             if (response.data && response.data.length > 0) {
-                const perImageCost = this.getImageCost(model, quality, size);
-                const totalCost = perImageCost * response.data.length;
+                const usageMetadata = {
+                    quality,
+                    size,
+                    is_edit: !!source_images,
+                };
+                const tokenUsageRecord = response.usage
+                    ? buildOpenAIImageUsageRecord(model, response.usage, response.data.length, opts?.request_id, usageMetadata)
+                    : undefined;
 
-                costTracker.addUsage({
-                    model,
-                    image_count: response.data.length,
-                    cost: totalCost, // explicit cost to avoid registry fallback
-                    request_id: opts?.request_id,
-                    metadata: {
-                        quality,
-                        size,
-                        cost_per_image: perImageCost,
-                        is_edit: !!source_images,
-                    },
-                });
+                if (tokenUsageRecord) {
+                    costTracker.addUsage(tokenUsageRecord);
+                } else {
+                    const perImageCost = this.getImageCost(model, quality, size);
+                    const totalCost = perImageCost * response.data.length;
+
+                    costTracker.addUsage({
+                        model,
+                        image_count: response.data.length,
+                        cost: totalCost, // explicit cost to avoid registry fallback
+                        request_id: opts?.request_id,
+                        metadata: {
+                            ...usageMetadata,
+                            ...getOpenAIImageCostMetadata(model, quality, size),
+                            cost_per_image: perImageCost,
+                            estimated: true,
+                        },
+                    });
+                }
             }
 
             // Extract the base64 image data for all images
@@ -630,38 +636,11 @@ export class OpenAIProvider extends BaseModelProvider {
      * Get the cost of generating an image based on model and parameters
      */
     private getImageCost(model: string, quality: string, size: string): number {
-        // Prices vary by quality and output size
-        const isLarge = size === '1536x1024' || size === '1024x1536';
-
-        // Normalize quality values: treat 'auto' as 'medium'
-        const q = quality === 'auto' ? 'medium' : quality;
-
-        // ChatGPT Image Latest and GPT Image 1.5 share the same published pricing.
-        if (model === 'chatgpt-image-latest' || model === 'gpt-image-1.5') {
-            if (q === 'high') return isLarge ? 0.2 : 0.133;
-            if (q === 'low') return isLarge ? 0.013 : 0.009;
-            // medium/default
-            return isLarge ? 0.05 : 0.034;
-        }
-
-        // GPT Image 1 pricing (OpenAI API Pricing)
-        if (model === 'gpt-image-1') {
-            if (q === 'high') return isLarge ? 0.167 : 0.103;
-            if (q === 'low') return isLarge ? 0.011 : 0.007;
-            // medium/default
-            return isLarge ? 0.042 : 0.026;
-        }
-
-        // GPT Image 1 Mini pricing (OpenAI API Pricing)
-        if (model === 'gpt-image-1-mini') {
-            if (q === 'high') return isLarge ? 0.02 : 0.015;
-            if (q === 'low') return isLarge ? 0.006 : 0.005;
-            // medium/default
-            return isLarge ? 0.015 : 0.011;
-        }
-
-        // Default/unknown pricing
-        return 0.04;
+        return getOpenAIImageCostEstimate(
+            model,
+            quality as 'low' | 'medium' | 'high' | 'auto',
+            size as '1024x1024' | '1536x1024' | '1024x1536' | 'auto'
+        );
     }
 
     /**

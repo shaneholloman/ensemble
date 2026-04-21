@@ -206,7 +206,7 @@ export const MODEL_CLASSES = {
     image_generation: {
         models: [
             // One top pick per image provider
-            'gpt-image-1.5', // OpenAI
+            'gpt-image-2', // OpenAI
             'gemini-3-pro-image-preview', // Google
             'seedream-4', // ByteDance
             'luma-photon-1', // Luma
@@ -2283,6 +2283,36 @@ export const MODEL_REGISTRY: ModelEntry[] = [
     },
 
     // Image generation models
+    {
+        id: 'gpt-image-2',
+        aliases: ['gpt-image-2-2026-04-21'],
+        provider: 'openai',
+        cost: {
+            // Token pricing as published by OpenAI. Provider usage is token-priced
+            // when available; per_image is the representative medium 1024x1024 estimate.
+            per_image: 0.053,
+            input_per_million: {
+                text: 5.0,
+                image: 8.0,
+            },
+            cached_input_per_million: {
+                text: 1.25,
+                image: 2.0,
+            },
+            output_per_million: {
+                text: 10.0,
+                image: 30.0,
+            },
+        },
+        features: {
+            input_modality: ['text', 'image'],
+            output_modality: ['image'],
+            streaming: false,
+        },
+        class: 'image_generation',
+        description:
+            "OpenAI's GPT Image 2 model for high-quality text-to-image generation and editing. Supports flexible sizes that satisfy the GPT Image 2 resolution constraints.",
+    },
     {
         id: 'gpt-image-1.5',
         aliases: ['gpt-image-1.5-2025-12-16'],
