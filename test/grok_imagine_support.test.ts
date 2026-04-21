@@ -57,7 +57,7 @@ describe('Grok imagine image support', () => {
         expect(costsByModel['grok-imagine-image']?.calls).toBe(1);
     });
 
-    it('uses xAI image edit endpoint for source images and bills inputs plus outputs', async () => {
+    it('uses xAI image edit endpoint for multiple source images and bills inputs plus outputs', async () => {
         const provider = new GrokProvider();
         const post = vi.fn().mockResolvedValue({
             data: [{ b64_json: 'YWJjMTIz' }],
@@ -90,7 +90,7 @@ describe('Grok imagine image support', () => {
                 n: 1,
                 response_format: 'b64_json',
                 aspect_ratio: 'auto',
-                image: [
+                images: [
                     {
                         type: 'image_url',
                         url: 'https://example.com/reference.png',
@@ -106,5 +106,39 @@ describe('Grok imagine image support', () => {
         const costsByModel = costTracker.getCostsByModel();
         expect(costsByModel['grok-imagine-image-pro']?.cost).toBeCloseTo(0.21);
         expect(costsByModel['grok-imagine-image-pro']?.calls).toBe(1);
+    });
+
+    it('uses xAI image edit endpoint object shape for a single source image', async () => {
+        const provider = new GrokProvider();
+        const post = vi.fn().mockResolvedValue({
+            data: [{ url: 'https://example.com/edited.png' }],
+        });
+
+        (provider as any)._client = { post };
+
+        const images = await provider.createImage(
+            'Turn this sketch into a polished interface',
+            'grok-imagine-image',
+            { agent_id: 'test-grok-single-edit' } as any,
+            {
+                source_images: ['https://example.com/sketch.png'],
+            }
+        );
+
+        expect(images).toEqual(['https://example.com/edited.png']);
+        expect(post).toHaveBeenCalledWith('/images/edits', {
+            body: {
+                model: 'grok-imagine-image',
+                prompt: 'Turn this sketch into a polished interface',
+                n: 1,
+                image: {
+                    url: 'https://example.com/sketch.png',
+                },
+            },
+        });
+
+        const costsByModel = costTracker.getCostsByModel();
+        expect(costsByModel['grok-imagine-image']?.cost).toBeCloseTo(0.04);
+        expect(costsByModel['grok-imagine-image']?.calls).toBe(1);
     });
 });

@@ -199,7 +199,11 @@ export class GrokProvider extends OpenAIChat {
         }
 
         if (usesEditingEndpoint) {
-            requestBody.image = sourceImages.length === 1 ? sourceImages[0] : sourceImages;
+            if (sourceImages.length === 1) {
+                requestBody.image = { url: sourceImages[0].url };
+            } else {
+                requestBody.images = sourceImages;
+            }
         }
 
         const endpoint = usesEditingEndpoint ? '/images/edits' : '/images/generations';
