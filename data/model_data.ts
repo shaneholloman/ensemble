@@ -86,7 +86,7 @@ export const MODEL_CLASSES = {
         models: [
             'gpt-5.4-pro', // OpenAI
             'gemini-3.1-pro-preview', // Google
-            'claude-opus-4-6', // Anthropic
+            'claude-opus-4-7', // Anthropic
             'grok-4', // X.AI
         ],
         random: true,
@@ -119,7 +119,7 @@ export const MODEL_CLASSES = {
         models: [
             'gpt-5.4', // OpenAI
             'gemini-3.1-pro-preview', // Google
-            'claude-opus-4-6', // Anthropic
+            'claude-opus-4-7', // Anthropic
             'grok-4', // X.AI
         ],
         random: true,
@@ -130,7 +130,7 @@ export const MODEL_CLASSES = {
         models: [
             'gpt-5.3-codex', // OpenAI
             'gemini-3.1-pro-preview', // Google
-            'claude-opus-4-6', // Anthropic
+            'claude-opus-4-7', // Anthropic
             'grok-4', // X.AI
             'qwen3-coder', // OpenRouter
         ],
@@ -165,7 +165,7 @@ export const MODEL_CLASSES = {
         models: [
             'gpt-5.4', // OpenAI
             'gemini-3.1-pro-preview', // Google
-            'claude-opus-4-6', // Anthropic
+            'claude-opus-4-7', // Anthropic
             'grok-4', // X.AI
         ],
         random: true,
@@ -196,7 +196,7 @@ export const MODEL_CLASSES = {
         models: [
             'gpt-5.4', // OpenAI
             'gemini-3.1-pro-preview', // Google
-            'claude-opus-4-6', // Anthropic
+            'claude-opus-4-7', // Anthropic
             'grok-4', // X.AI
         ],
         random: true,
@@ -1977,7 +1977,7 @@ export const MODEL_REGISTRY: ModelEntry[] = [
     // Claude Opus 4.6
     {
         id: 'claude-opus-4-6',
-        aliases: ['claude-opus-4-6', 'claude-opus-4.6', 'claude-opus', 'claude-opus-latest', 'claude-4.6-opus'],
+        aliases: ['claude-opus-4-6', 'claude-opus-4.6', 'claude-4.6-opus'],
         provider: 'anthropic',
         cost: {
             input_per_million: 5.0,
@@ -2001,7 +2001,31 @@ export const MODEL_REGISTRY: ModelEntry[] = [
             code: 96,
             reasoning: 96,
         },
-        description: 'Claude Opus 4.6 - Latest Opus model with strongest reasoning, code, and long-form capabilities.',
+        description: 'Claude Opus 4.6 - Premium Opus model with strong reasoning, code, and long-form capabilities.',
+    },
+
+    // Claude Opus 4.7
+    {
+        id: 'claude-opus-4-7',
+        aliases: ['claude-opus-4-7', 'claude-opus-4.7', 'claude-opus', 'claude-opus-latest', 'claude-4.7-opus'],
+        provider: 'anthropic',
+        cost: {
+            input_per_million: 5.0,
+            output_per_million: 25.0,
+            cached_input_per_million: 0.5,
+        },
+        features: {
+            context_length: 1_000_000,
+            input_modality: ['text', 'image'],
+            output_modality: ['text'],
+            tool_use: true,
+            streaming: true,
+            json_output: true,
+            reasoning_output: true,
+            max_output_tokens: 128000,
+        },
+        class: 'reasoning',
+        description: 'Claude Opus 4.7 - Frontier Opus model for complex reasoning, agentic coding, and high-resolution vision.',
     },
 
     //

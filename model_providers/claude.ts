@@ -47,6 +47,56 @@ const THINKING_BUDGET_CONFIGS: Record<string, number> = {
     '-max': 30000,
 };
 
+type ClaudeAdaptiveEffort = 'low' | 'medium' | 'high' | 'xhigh';
+type ClaudeAdaptiveEffortOrOff = ClaudeAdaptiveEffort | 'off';
+
+const CLAUDE_OPUS_4_7_ID = 'claude-opus-4-7';
+const CLAUDE_ADAPTIVE_EFFORT_SUFFIXES: Record<string, ClaudeAdaptiveEffortOrOff> = {
+    '-none': 'off',
+    '-minimal': 'low',
+    '-low': 'low',
+    '-medium': 'medium',
+    '-high': 'high',
+    '-xhigh': 'xhigh',
+    '-max': 'xhigh',
+};
+
+function parseThinkingBudget(value: unknown): number | null {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+        return null;
+    }
+    return Math.max(0, Math.floor(value));
+}
+
+function mapThinkingBudgetToClaudeAdaptiveEffort(budget: number): ClaudeAdaptiveEffortOrOff {
+    if (budget === 0) return 'off';
+    if (budget <= 2048) return 'low';
+    if (budget <= 8192) return 'medium';
+    if (budget <= 32768) return 'high';
+    return 'xhigh';
+}
+
+function getSuffixedBaseModel(model: string): { baseModel: string; suffix: string } {
+    const suffixes = [
+        ...Object.keys(CLAUDE_ADAPTIVE_EFFORT_SUFFIXES),
+        ...Object.keys(THINKING_BUDGET_CONFIGS),
+    ];
+    for (const suffix of suffixes) {
+        if (model.endsWith(suffix)) {
+            return {
+                baseModel: model.slice(0, -suffix.length),
+                suffix,
+            };
+        }
+    }
+    return { baseModel: model, suffix: '' };
+}
+
+function isClaudeOpus47Model(model: string): boolean {
+    const { baseModel } = getSuffixedBaseModel(model);
+    return findModel(baseModel)?.id === CLAUDE_OPUS_4_7_ID || baseModel === CLAUDE_OPUS_4_7_ID;
+}
+
 // Content has many forms... here we extract them all!
 function contentToString(content: any) {
     if (content) {
@@ -601,36 +651,77 @@ export class ClaudeProvider extends BaseModelProvider {
             }
 
             // Enable thinking if specified for the model
-            let thinking = undefined;
+            let thinking: any = undefined;
+            let outputConfig: any = undefined;
             let thinkingSet = false;
-            const thinkingBudgetFromSettings =
-                settings && typeof settings.thinking_budget === 'number' && Number.isFinite(settings.thinking_budget)
-                    ? Math.max(0, Math.floor(settings.thinking_budget))
-                    : null;
-            for (const [suffix, budget] of Object.entries(THINKING_BUDGET_CONFIGS)) {
-                if (model.endsWith(suffix)) {
+            const thinkingBudgetFromSettings = parseThinkingBudget(settings?.thinking_budget);
+            const isClaude47 = isClaudeOpus47Model(model);
+
+            if (isClaude47) {
+                let adaptiveEffort: ClaudeAdaptiveEffortOrOff | undefined;
+                for (const [suffix, effort] of Object.entries(CLAUDE_ADAPTIVE_EFFORT_SUFFIXES)) {
+                    if (model.endsWith(suffix)) {
+                        adaptiveEffort = effort;
+                        model = model.slice(0, -suffix.length);
+                        break;
+                    }
+                }
+
+                if (thinkingBudgetFromSettings !== null) {
+                    adaptiveEffort = mapThinkingBudgetToClaudeAdaptiveEffort(thinkingBudgetFromSettings);
+                }
+
+                const modelEntry = findModel(model);
+                if (modelEntry?.id === CLAUDE_OPUS_4_7_ID) {
+                    model = modelEntry.id;
+                }
+
+                thinkingSet = true;
+                if (adaptiveEffort !== 'off') {
+                    thinking = {
+                        type: 'adaptive',
+                        display: 'summarized',
+                    };
+                    outputConfig = {
+                        effort: adaptiveEffort ?? 'high',
+                    };
+                }
+            } else {
+                for (const [suffix, budget] of Object.entries(THINKING_BUDGET_CONFIGS)) {
+                    if (model.endsWith(suffix)) {
+                        thinkingSet = true;
+                        if (budget > 0) {
+                            thinking = {
+                                type: 'enabled',
+                                budget_tokens: budget,
+                            };
+                        }
+                        model = model.slice(0, -suffix.length);
+                        break;
+                    }
+                }
+
+                if (thinkingBudgetFromSettings !== null) {
                     thinkingSet = true;
-                    if (budget > 0) {
+                    if (thinkingBudgetFromSettings > 0) {
                         thinking = {
                             type: 'enabled',
-                            budget_tokens: budget,
+                            budget_tokens: thinkingBudgetFromSettings,
                         };
+                    } else {
+                        thinking = undefined;
                     }
-                    model = model.slice(0, -suffix.length);
-                    break;
                 }
             }
 
-            if (thinkingBudgetFromSettings !== null) {
-                thinkingSet = true;
-                if (thinkingBudgetFromSettings > 0) {
-                    thinking = {
-                        type: 'enabled',
-                        budget_tokens: thinkingBudgetFromSettings,
-                    };
-                } else {
-                    thinking = undefined;
-                }
+            const canonicalModel = findModel(model);
+            if (canonicalModel?.provider === 'anthropic') {
+                model = canonicalModel.id;
+            }
+            if (!headers && (model.startsWith('claude-sonnet-4') || model.startsWith('claude-opus-4'))) {
+                headers = {
+                    'anthropic-beta': 'interleaved-thinking-2025-05-14',
+                };
             }
 
             // Set max tokens based on settings or model
@@ -663,10 +754,11 @@ export class ClaudeProvider extends BaseModelProvider {
             }
 
             // Determine if thinking is enabled
-            const thinkingEnabled = thinking !== undefined && thinking.type === 'enabled';
+            const thinkingEnabled = thinking !== undefined;
 
             // Anthropic requires temperature=1 whenever thinking is enabled.
-            const requestTemperature = thinkingEnabled ? 1 : settings?.temperature;
+            // Claude Opus 4.7 rejects non-default sampling parameters, so omit them.
+            const requestTemperature = isClaude47 ? undefined : thinkingEnabled ? 1 : settings?.temperature;
 
             // Preprocess *and* convert messages for Claude in one pass
             const claudeMessages = await this.prepareClaudeMessages(messages, model, thinkingEnabled);
@@ -692,6 +784,7 @@ export class ClaudeProvider extends BaseModelProvider {
                 stream: true,
                 max_tokens,
                 ...(thinking ? { thinking } : {}),
+                ...(outputConfig ? { output_config: outputConfig } : {}),
                 ...(requestTemperature !== undefined ? { temperature: requestTemperature } : {}),
             };
 

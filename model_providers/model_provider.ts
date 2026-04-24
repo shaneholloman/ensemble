@@ -367,8 +367,9 @@ export async function getModelFromAgent(
         ));
 
     // Resolve any aliases to the actual model ID
-    // But preserve suffixes (-low, -medium, -high, -max) if they were explicitly provided
-    const suffixes = ['-low', '-medium', '-high', '-max'];
+    // But preserve suffixes if they were explicitly provided.
+    // Provider implementations may interpret these as reasoning or thinking controls.
+    const suffixes = ['-xhigh', '-minimal', '-low', '-medium', '-high', '-none', '-max'];
     let suffix = '';
     let baseModel = model;
 
@@ -385,8 +386,6 @@ export async function getModelFromAgent(
     const modelEntry = findModel(baseModel);
 
     // If we found a model entry and had a suffix, append it back.
-    // Provider implementations may interpret suffixes like -low/-high as
-    // provider-specific reasoning or thinking controls.
     if (modelEntry?.id) {
         return modelEntry.id + suffix;
     }
