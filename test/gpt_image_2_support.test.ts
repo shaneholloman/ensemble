@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { findModel, MODEL_CLASSES } from '../data/model_data.js';
 import { OpenAIProvider } from '../model_providers/openai.js';
+import { normalizeOpenAIImageSize } from '../model_providers/openai_image_pricing.js';
 import { costTracker } from '../utils/cost_tracker.js';
 
 describe('gpt-image-2 support', () => {
@@ -88,6 +89,61 @@ describe('gpt-image-2 support', () => {
         const expectedCost = (100 / 1_000_000) * 5 + (50 / 1_000_000) * 8 + (5500 / 1_000_000) * 30;
         expect(costTracker.getTotalCost()).toBeCloseTo(expectedCost);
         expect(costTracker.getCostsByModel()['gpt-image-2']?.calls).toBe(1);
+    });
+
+    it('maps provider-neutral aspect ratios to flexible gpt-image-2 pixel sizes', async () => {
+        expect(normalizeOpenAIImageSize('gpt-image-2', '1:1')).toBe('1024x1024');
+        expect(normalizeOpenAIImageSize('gpt-image-2', '2:3')).toBe('1024x1536');
+        expect(normalizeOpenAIImageSize('gpt-image-2', '3:2')).toBe('1536x1024');
+        expect(normalizeOpenAIImageSize('gpt-image-2', '3:4')).toBe('1088x1456');
+        expect(normalizeOpenAIImageSize('gpt-image-2', '21:9')).toBe('1920x816');
+        expect(normalizeOpenAIImageSize('gpt-image-2', '4:1')).toBe('auto');
+        expect(normalizeOpenAIImageSize('gpt-image-1', '3:4')).toBe('auto');
+    });
+
+    it('sends normalized aspect-ratio sizes for gpt-image-2 requests', async () => {
+        const provider = new OpenAIProvider('sk-test');
+        const addUsageSpy = vi.spyOn(costTracker, 'addUsage');
+        const generate = vi.fn().mockResolvedValue({
+            data: [{ b64_json: 'YWJjMTIz' }],
+        });
+
+        (provider as any)._client = {
+            images: {
+                generate,
+            },
+        };
+
+        await provider.createImage(
+            'A clean poster with the original composition preserved',
+            'gpt-image-2',
+            { agent_id: 'test-gpt-image-2-aspect' } as any,
+            {
+                quality: 'medium',
+                size: '3:4',
+            }
+        );
+
+        expect(generate).toHaveBeenCalledWith(
+            expect.objectContaining({
+                model: 'gpt-image-2',
+                quality: 'medium',
+                size: '1088x1456',
+            })
+        );
+        expect(costTracker.getCostsByModel()['gpt-image-2']?.cost).toBeCloseTo(0.050668);
+        expect(addUsageSpy.mock.calls[0]?.[0]).toMatchObject({
+            model: 'gpt-image-2',
+            image_count: 1,
+            cost: 0.050668,
+            metadata: {
+                quality: 'medium',
+                size: '1088x1456',
+                pricing_source: 'ensemble_size_estimate',
+                cost_per_image: 0.050668,
+                estimated: true,
+            },
+        });
     });
 
     it('uses documented common-size estimates when OpenAI does not return usage', async () => {

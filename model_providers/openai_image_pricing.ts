@@ -22,6 +22,10 @@ const GPT_IMAGE_2_COSTS: Record<Exclude<OpenAIImageQuality, 'auto'>, { square: n
 const GPT_IMAGE_2_OUTPUT_PRICE_PER_MILLION = 30;
 const GPT_IMAGE_2_SQUARE_PIXELS = 1024 * 1024;
 const GPT_IMAGE_2_LARGE_PIXELS = 1536 * 1024;
+const GPT_IMAGE_2_MIN_PIXELS = 655_360;
+const GPT_IMAGE_2_MAX_PIXELS = 8_294_400;
+const GPT_IMAGE_2_MAX_ASPECT_RATIO = 3;
+const GPT_IMAGE_2_SIZE_MULTIPLE = 16;
 
 const GPT_IMAGE_15_COSTS: Record<Exclude<OpenAIImageQuality, 'auto'>, { square: number; large: number }> = {
     low: { square: 0.009, large: 0.013 },
@@ -55,9 +59,14 @@ export function normalizeOpenAIImageSize(model: string, size?: ImageGenerationOp
     if (size === 'portrait') return '1024x1536';
     if (size === '1024x1024' || size === '1536x1024' || size === '1024x1536') return size;
 
-    if (isGptImage2(model) && isPixelSize(size)) {
-        assertValidGptImage2Size(size);
-        return size;
+    if (isGptImage2(model)) {
+        if (isPixelSize(size)) {
+            assertValidGptImage2Size(size);
+            return size;
+        }
+
+        const aspectSize = mapGptImage2AspectSize(size);
+        if (aspectSize) return aspectSize;
     }
 
     return 'auto';
@@ -206,6 +215,38 @@ function isPixelSize(size: string): size is `${number}x${number}` {
     return /^\d+x\d+$/.test(size);
 }
 
+function mapGptImage2AspectSize(size: string): OpenAIImageSize | undefined {
+    const ratio = parseAspectRatioSize(size);
+    if (!ratio) return undefined;
+
+    const ratioWidth = ratio.width / ratio.height;
+    const aspectRatio = Math.max(ratio.width, ratio.height) / Math.min(ratio.width, ratio.height);
+    if (aspectRatio > GPT_IMAGE_2_MAX_ASPECT_RATIO) return undefined;
+    if (ratio.width === ratio.height) return '1024x1024';
+
+    const width = roundToMultiple(Math.sqrt(GPT_IMAGE_2_LARGE_PIXELS * ratioWidth), GPT_IMAGE_2_SIZE_MULTIPLE);
+    const height = roundToMultiple(Math.sqrt(GPT_IMAGE_2_LARGE_PIXELS / ratioWidth), GPT_IMAGE_2_SIZE_MULTIPLE);
+    const sizeValue = `${width}x${height}` as `${number}x${number}`;
+
+    assertValidGptImage2Size(sizeValue);
+    return sizeValue;
+}
+
+function parseAspectRatioSize(size: string): { width: number; height: number } | undefined {
+    const match = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(size);
+    if (!match) return undefined;
+
+    const width = Number(match[1]);
+    const height = Number(match[2]);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return undefined;
+
+    return { width, height };
+}
+
+function roundToMultiple(value: number, multiple: number): number {
+    return Math.max(multiple, Math.round(value / multiple) * multiple);
+}
+
 function assertValidGptImage2Size(size: `${number}x${number}`): void {
     const [width, height] = size.split('x').map(Number);
     const shortEdge = Math.min(width, height);
@@ -215,12 +256,16 @@ function assertValidGptImage2Size(size: `${number}x${number}`): void {
     if (width % 16 !== 0 || height % 16 !== 0) {
         throw new Error(`gpt-image-2 size ${size} is invalid: both edges must be multiples of 16px.`);
     }
-    if (longEdge / shortEdge > 3) {
-        throw new Error(`gpt-image-2 size ${size} is invalid: long edge to short edge ratio must not exceed 3:1.`);
-    }
-    if (pixels < 655_360 || pixels > 8_294_400) {
+    if (longEdge / shortEdge > GPT_IMAGE_2_MAX_ASPECT_RATIO) {
         throw new Error(
-            `gpt-image-2 size ${size} is invalid: total pixels must be between 655,360 and 8,294,400.`
+            `gpt-image-2 size ${size} is invalid: long edge to short edge ratio must not exceed ${GPT_IMAGE_2_MAX_ASPECT_RATIO}:1.`
+        );
+    }
+    if (pixels < GPT_IMAGE_2_MIN_PIXELS || pixels > GPT_IMAGE_2_MAX_PIXELS) {
+        throw new Error(
+            `gpt-image-2 size ${size} is invalid: total pixels must be between ${GPT_IMAGE_2_MIN_PIXELS.toLocaleString(
+                'en-US'
+            )} and ${GPT_IMAGE_2_MAX_PIXELS.toLocaleString('en-US')}.`
         );
     }
 }
