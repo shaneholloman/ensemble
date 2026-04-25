@@ -57,6 +57,26 @@ const examples = {
     },
 };
 
+const getMessageRecord = (message: unknown): Record<string, unknown> => {
+    if (typeof message === 'object' && message !== null) {
+        return message as unknown as Record<string, unknown>;
+    }
+    return {};
+};
+
+const normalizeModelClasses = (modelClasses: unknown): string[] => {
+    const rawClasses = Array.isArray(modelClasses) ? modelClasses : [modelClasses];
+
+    return rawClasses
+        .map(cls => {
+            if (typeof cls === 'object' && cls !== null && 'id' in cls) {
+                return String((cls as { id: unknown }).id);
+            }
+            return typeof cls === 'string' ? cls : undefined;
+        })
+        .filter((cls): cls is string => Boolean(cls));
+};
+
 export default function RequestDemo() {
     const [selectedExample, setSelectedExample] = useState<string>('');
     const [customPrompt, setCustomPrompt] = useState(
@@ -103,14 +123,8 @@ export default function RequestDemo() {
                     //     setAvailableModels(uniqueModels)
                     // }
                     if (data.modelClasses) {
-                        const classes = Array.isArray(data.modelClasses)
-                            ? data.modelClasses.map((cls: unknown) =>
-                                  typeof cls === 'object' && cls !== null && 'id' in cls
-                                      ? (cls as { id: string }).id
-                                      : cls
-                              )
-                            : data.modelClasses;
-                        setAvailableModelClasses(Array.from(new Set(classes)) as string[]);
+                        const classes = normalizeModelClasses(data.modelClasses);
+                        setAvailableModelClasses(Array.from(new Set(classes)));
                         if (!selectedModelClass && classes.includes('standard')) {
                             setSelectedModelClass('standard');
                         }
@@ -287,7 +301,7 @@ export default function RequestDemo() {
 
             // Build conversation history
             const conversationHistory = taskState.messages.map(m => {
-                const msg = m.message as Record<string, unknown>;
+                const msg = getMessageRecord(m.message);
                 return {
                     role: (msg.role as string) || (msg.type === 'user' ? 'user' : 'assistant'),
                     content: (msg.content as string) || '',
@@ -379,7 +393,7 @@ export default function RequestDemo() {
             code: generateRequestCode({
                 model: selectedModelClass,
                 messages: taskState.messages.map(m => {
-                    const msg = m.message as Record<string, unknown>;
+                    const msg = getMessageRecord(m.message);
                     return {
                         role: (msg.role as string) || (msg.type === 'user' ? 'user' : 'assistant'),
                         content: (msg.content as string) || '',
@@ -801,13 +815,8 @@ export default function RequestDemo() {
                                     isStreaming={taskStatus === 'running'}
                                     placeholder="Type your message here..."
                                     disabled={!isConnected}
-                                    style={{
-                                        width: '100%',
-                                        resize: 'vertical',
-                                        minHeight: '100px',
-                                        padding: '20px',
-                                        maxHeight: '300px',
-                                    }}
+                                    className="request-conversation-input"
+                                    inputClassName="request-conversation-textarea"
                                 />
                             </div>
                         )}

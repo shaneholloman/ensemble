@@ -24,6 +24,17 @@
   animation: fadeIn 0.3s ease-in-out;
 }
 
+.request-conversation-input {
+  width: 100%;
+}
+
+.request-conversation-textarea {
+  min-height: 100px !important;
+  max-height: 300px !important;
+  padding: 20px !important;
+  resize: vertical !important;
+}
+
 @keyframes fadeIn {
   from {
     opacity: 0;

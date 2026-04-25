@@ -342,7 +342,10 @@ const VoiceDemo: React.FC = () => {
                 ? 'wav'
                 : audioFormat;
         const mimeType = getMimeType(effectiveFormat);
-        const blob = new Blob(audioChunksRef.current, { type: mimeType });
+        const blob = new Blob(
+            audioChunksRef.current.map(chunk => new Uint8Array(chunk)),
+            { type: mimeType }
+        );
         currentAudioBlobRef.current = blob;
 
         // Wait for streaming to finish before setting up the audio player
