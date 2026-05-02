@@ -50,7 +50,7 @@ export const MODEL_CLASSES = {
     standard: {
         models: [
             // One top pick per provider (prefer stable IDs over dated previews when possible)
-            'gpt-5.2-chat-latest', // OpenAI
+            'gpt-5.5', // OpenAI
             'gemini-3-flash-preview', // Google
             'claude-sonnet-4-6', // Anthropic
             'grok-4', // X.AI
@@ -73,7 +73,7 @@ export const MODEL_CLASSES = {
     reasoning: {
         models: [
             // Strong reasoning at reasonable cost
-            'gpt-5.4', // OpenAI
+            'gpt-5.5', // OpenAI
             'gemini-2.5-pro', // Google
             'claude-sonnet-4-6', // Anthropic
             'grok-4-1-fast-reasoning', // X.AI
@@ -84,7 +84,7 @@ export const MODEL_CLASSES = {
     // Maxed-out reasoning models (highest tier per provider)
     reasoning_high: {
         models: [
-            'gpt-5.4-pro', // OpenAI
+            'gpt-5.5-pro', // OpenAI
             'gemini-3.1-pro-preview', // Google
             'claude-opus-4-7', // Anthropic
             'grok-4', // X.AI
@@ -106,7 +106,7 @@ export const MODEL_CLASSES = {
     // Monologue models
     monologue: {
         models: [
-            'gpt-5.2-chat-latest', // OpenAI
+            'gpt-5.5', // OpenAI
             'gemini-3.1-pro-preview', // Google
             'claude-sonnet-4-6', // Anthropic
             'grok-4', // X.AI
@@ -117,7 +117,7 @@ export const MODEL_CLASSES = {
     // Metacognition models
     metacognition: {
         models: [
-            'gpt-5.4', // OpenAI
+            'gpt-5.5', // OpenAI
             'gemini-3.1-pro-preview', // Google
             'claude-opus-4-7', // Anthropic
             'grok-4', // X.AI
@@ -140,7 +140,7 @@ export const MODEL_CLASSES = {
     // Writing models - optimized for conversation and text generation
     writing: {
         models: [
-            'gpt-5.2-chat-latest', // OpenAI
+            'gpt-5.5', // OpenAI
             'gemini-3-flash-preview', // Google
             'claude-sonnet-4-6', // Anthropic
             'grok-4', // X.AI
@@ -163,7 +163,7 @@ export const MODEL_CLASSES = {
     // Models with vision capabilities
     vision: {
         models: [
-            'gpt-5.4', // OpenAI
+            'gpt-5.5', // OpenAI
             'gemini-3.1-pro-preview', // Google
             'claude-opus-4-7', // Anthropic
             'grok-4', // X.AI
@@ -194,7 +194,7 @@ export const MODEL_CLASSES = {
     // Models with very large context windows (near 1M tokens)
     long: {
         models: [
-            'gpt-5.4', // OpenAI
+            'gpt-5.5', // OpenAI
             'gemini-3.1-pro-preview', // Google
             'claude-opus-4-7', // Anthropic
             'grok-4', // X.AI
@@ -1009,6 +1009,81 @@ export const MODEL_REGISTRY: ModelEntry[] = [
         },
         class: 'standard', // High-end standard model
         description: 'Latest premium GPT model from OpenAI',
+    },
+
+    // GPT-5.5 models
+    {
+        id: 'gpt-5.5',
+        aliases: ['gpt-5.5-2026-04-23'],
+        provider: 'openai',
+        cost: {
+            input_per_million: {
+                threshold_tokens: 272000,
+                price_below_threshold_per_million: 5.0,
+                price_above_threshold_per_million: 10.0,
+                tier_basis: 'input_tokens',
+            },
+            cached_input_per_million: {
+                threshold_tokens: 272000,
+                price_below_threshold_per_million: 0.5,
+                price_above_threshold_per_million: 1.0,
+                tier_basis: 'input_tokens',
+            },
+            output_per_million: {
+                threshold_tokens: 272000,
+                price_below_threshold_per_million: 30.0,
+                price_above_threshold_per_million: 45.0,
+                tier_basis: 'input_tokens',
+            },
+        },
+        features: {
+            context_length: 1050000,
+            max_output_tokens: 128000,
+            input_modality: ['text', 'image'],
+            output_modality: ['text'],
+            tool_use: true,
+            streaming: true,
+            json_output: true,
+        },
+        class: 'reasoning',
+        score: 99,
+        scores: {
+            monologue: 99,
+            code: 98,
+            reasoning: 98,
+        },
+        description: 'Latest GPT-5.5 frontier model for complex reasoning, coding, and professional work (1.05M/128k).',
+    },
+    {
+        id: 'gpt-5.5-pro',
+        aliases: ['gpt-5.5-pro-2026-04-23'],
+        provider: 'openai',
+        cost: {
+            input_per_million: {
+                threshold_tokens: 272000,
+                price_below_threshold_per_million: 30.0,
+                price_above_threshold_per_million: 60.0,
+                tier_basis: 'input_tokens',
+            },
+            output_per_million: {
+                threshold_tokens: 272000,
+                price_below_threshold_per_million: 180.0,
+                price_above_threshold_per_million: 270.0,
+                tier_basis: 'input_tokens',
+            },
+        },
+        features: {
+            context_length: 1050000,
+            max_output_tokens: 128000,
+            input_modality: ['text', 'image'],
+            output_modality: ['text'],
+            tool_use: true,
+            streaming: false,
+            json_output: true,
+        },
+        class: 'reasoning',
+        score: 100,
+        description: 'Highest-accuracy GPT-5.5 variant for the hardest problems (1.05M/128k, non-streaming).',
     },
 
     // GPT-5.4 models

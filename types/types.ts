@@ -632,6 +632,7 @@ export interface TieredPrice {
     threshold_tokens: number; // The token count threshold for the price change
     price_below_threshold_per_million: number; // Price per million tokens <= threshold
     price_above_threshold_per_million: number; // Price per million tokens > threshold
+    tier_basis?: 'component_tokens' | 'input_tokens'; // Which token count controls the tier
 }
 
 // Structure for time-based pricing (Peak/Off-Peak)

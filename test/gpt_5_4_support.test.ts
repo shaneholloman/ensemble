@@ -61,15 +61,10 @@ describe('GPT-5.4 support', () => {
         expect(nano?.cost?.output_per_million).toBe(1.25);
     });
 
-    it('updates the OpenAI defaults across GPT-5.4 family model classes', () => {
+    it('keeps GPT-5.4 smaller variants as defaults where no GPT-5.5 variant exists', () => {
         expect(MODEL_CLASSES.mini.models[0]).toBe('gpt-5.4-nano');
-        expect(MODEL_CLASSES.reasoning.models[0]).toBe('gpt-5.4');
-        expect(MODEL_CLASSES.reasoning_high.models[0]).toBe('gpt-5.4-pro');
         expect(MODEL_CLASSES.reasoning_mini.models[0]).toBe('gpt-5.4-mini');
-        expect(MODEL_CLASSES.metacognition.models[0]).toBe('gpt-5.4');
-        expect(MODEL_CLASSES.vision.models[0]).toBe('gpt-5.4');
         expect(MODEL_CLASSES.vision_mini.models[0]).toBe('gpt-5.4-mini');
-        expect(MODEL_CLASSES.long.models[0]).toBe('gpt-5.4');
     });
 
     it('normalizes dated GPT-5.4 aliases back to their canonical model IDs', async () => {

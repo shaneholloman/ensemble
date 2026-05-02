@@ -154,7 +154,9 @@ class CostTracker {
                 } else if ('threshold_tokens' in costStructure) {
                     // Token-Based Tiered Pricing
                     const tieredCost = costStructure as TieredPrice;
-                    if (tokensForTierCheck <= tieredCost.threshold_tokens) {
+                    const tierBasisTokens =
+                        tieredCost.tier_basis === 'input_tokens' ? original_input_tokens : tokensForTierCheck;
+                    if (tierBasisTokens <= tieredCost.threshold_tokens) {
                         return tieredCost.price_below_threshold_per_million;
                     } else {
                         return tieredCost.price_above_threshold_per_million;

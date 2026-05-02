@@ -39,6 +39,8 @@ import {
     normalizeOpenAIImageQuality,
     normalizeOpenAIImageSize,
 } from './openai_image_pricing.js';
+import { findModel } from '../data/model_data.js';
+import { buildEventsFromOpenAIResponse } from './openai_response_events.js';
 import type { ResponseCreateParamsStreaming } from 'openai/resources/responses/responses.js';
 import type { WebSocket } from 'ws';
 
@@ -1093,10 +1095,14 @@ export class OpenAIProvider extends BaseModelProvider {
 
             const isO3Model = (m: string) => m === 'o3' || m.startsWith('o3-');
             const isGpt5Family = (m: string) => m.startsWith('gpt-5');
-            const isGpt514Or52 = (m: string) =>
-                m.startsWith('gpt-5.1') || m.startsWith('gpt-5.2') || m.startsWith('gpt-5.4');
+            const isGptWithSamplingAtNoReasoning = (m: string) =>
+                m.startsWith('gpt-5.1') ||
+                m.startsWith('gpt-5.2') ||
+                m.startsWith('gpt-5.4') ||
+                m.startsWith('gpt-5.5');
             const getDefaultReasoningEffort = (m: string): OpenAIReasoningEffort | undefined => {
-                if (m === 'gpt-5.4-pro' || m === 'gpt-5.2-pro' || m === 'gpt-5-pro') return 'high';
+                if (m === 'gpt-5.5-pro' || m === 'gpt-5.4-pro' || m === 'gpt-5.2-pro' || m === 'gpt-5-pro')
+                    return 'high';
                 if (m.startsWith('gpt-5.4') || m.startsWith('gpt-5.2') || m.startsWith('gpt-5.1')) return 'none';
                 if (m.startsWith('gpt-5')) return 'medium';
                 if (m.startsWith('o')) return 'high';
@@ -1127,8 +1133,9 @@ export class OpenAIProvider extends BaseModelProvider {
 
             // Apply reasoning defaults.
             // - GPT-5.1/5.2/5.4 default to effort=none (do not send reasoning by default so temperature/top_p can work)
+            // - GPT-5.5 defaults to effort=medium
             // - GPT-5 defaults to effort=medium
-            // - GPT-5 Pro defaults to effort=high
+            // - GPT-5 Pro variants default to effort=high
             // - O-series models default to effort=high
             const defaultEffort = getDefaultReasoningEffort(model);
             const effectiveEffort = requestedReasoningEffort ?? defaultEffort;
@@ -1165,10 +1172,10 @@ export class OpenAIProvider extends BaseModelProvider {
             }
 
             // GPT-5 family parameter compatibility (per OpenAI model guide)
-            // - GPT-5.1/5.2/5.4 support temperature/top_p only when reasoning effort = none
+            // - GPT-5.1/5.2/5.4/5.5 support temperature/top_p only when reasoning effort = none
             // - Older GPT-5 models do not support these fields at all
             if (isGpt5Family(model)) {
-                const allowSamplingParams = isGpt514Or52(model) && effectiveEffort === 'none';
+                const allowSamplingParams = isGptWithSamplingAtNoReasoning(model) && effectiveEffort === 'none';
                 if (!allowSamplingParams) {
                     delete requestParams.temperature;
                     delete requestParams.top_p;
@@ -1221,6 +1228,11 @@ export class OpenAIProvider extends BaseModelProvider {
                 requestParams = await convertToOpenAITools(requestParams, tools);
             }
 
+            const modelSupportsStreaming = findModel(model)?.features?.streaming !== false;
+            if (!modelSupportsStreaming) {
+                delete (requestParams as any).stream;
+            }
+
             // Log the request using the provided requestId or generate a new one
             const loggedRequestId = log_llm_request(
                 agent.agent_id,
@@ -1237,6 +1249,60 @@ export class OpenAIProvider extends BaseModelProvider {
             // Wait while system is paused before making the API request
             const { waitWhilePaused } = await import('../utils/pause_controller.js');
             await waitWhilePaused(100, agent.abortSignal);
+
+            if (!modelSupportsStreaming) {
+                const response = await this.client.responses.create(requestParams as any, {
+                    signal: agent.abortSignal,
+                });
+
+                if ((response as any).usage) {
+                    const usage = (response as any).usage;
+                    const calculatedUsage = costTracker.addUsage({
+                        model,
+                        input_tokens: usage.input_tokens || 0,
+                        output_tokens: usage.output_tokens || 0,
+                        cached_tokens: usage.input_tokens_details?.cached_tokens || 0,
+                        metadata: {
+                            reasoning_tokens: usage.output_tokens_details?.reasoning_tokens || 0,
+                        },
+                    });
+
+                    if (!hasEventHandler()) {
+                        yield {
+                            type: 'cost_update',
+                            usage: {
+                                ...calculatedUsage,
+                                total_tokens: (usage.input_tokens || 0) + (usage.output_tokens || 0),
+                            },
+                        };
+                    }
+                }
+
+                if ((response as any).status === 'failed' && (response as any).error) {
+                    const errorInfo = (response as any).error;
+                    log_llm_error(requestId, errorInfo);
+                    yield {
+                        type: 'error',
+                        error: `OpenAI response failed: [${errorInfo.code || 'N/A'}] ${errorInfo.message}`,
+                        recoverable: false,
+                    };
+                } else if ((response as any).status === 'incomplete' && (response as any).incomplete_details) {
+                    const reason = (response as any).incomplete_details.reason;
+                    log_llm_error(requestId, 'OpenAI response incomplete: ' + reason);
+                    yield {
+                        type: 'error',
+                        error: 'OpenAI response incomplete: ' + reason,
+                        recoverable: false,
+                    };
+                } else {
+                    for (const event of buildEventsFromOpenAIResponse(response)) {
+                        yield event;
+                    }
+                }
+
+                log_llm_response(requestId, response);
+                return;
+            }
 
             const stream = await this.client.responses.create(requestParams, {
                 signal: agent.abortSignal,

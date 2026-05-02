@@ -24,13 +24,13 @@ describe('Model Scoring and Disabling', () => {
     it('should respect disabled models', async () => {
         const agent: AgentDefinition = {
             modelClass: 'standard',
-            disabledModels: ['gpt-5.2-chat-latest', 'claude-sonnet-4-6'],
+            disabledModels: ['gpt-5.5', 'claude-sonnet-4-6'],
         };
 
         // Run multiple times to ensure disabled models are never selected
         for (let i = 0; i < 10; i++) {
             const model = await getModelFromAgent(agent);
-            expect(model).not.toBe('gpt-5.2-chat-latest');
+            expect(model).not.toBe('gpt-5.5');
             expect(model).not.toBe('claude-sonnet-4-6');
         }
     });
@@ -39,7 +39,7 @@ describe('Model Scoring and Disabling', () => {
         const agent: AgentDefinition = {
             modelClass: 'standard',
             modelScores: {
-                'gpt-5.2-chat-latest': 90, // Should be selected most often
+                'gpt-5.5': 90, // Should be selected most often
                 'gemini-3-flash-preview': 10, // Should be selected rarely
             },
         };
@@ -55,7 +55,7 @@ describe('Model Scoring and Disabling', () => {
 
         // With 90:10 weighting, the high-weight model should be selected significantly more often
         // We'll allow some variance but expect at least 70% for the high-weight model
-        const gptCount = selectionCounts['gpt-5.2-chat-latest'] || 0;
+        const gptCount = selectionCounts['gpt-5.5'] || 0;
         const geminiCount = selectionCounts['gemini-3-flash-preview'] || 0;
 
         // Only check if both models were available
@@ -69,7 +69,7 @@ describe('Model Scoring and Disabling', () => {
             modelClass: 'standard',
             disabledModels: ['deepseek-chat', 'grok-4'],
             modelScores: {
-                'gpt-5.2-chat-latest': 80,
+                'gpt-5.5': 80,
                 'gemini-3-flash-preview': 20,
                 'claude-sonnet-4-6': 50,
             },
@@ -84,7 +84,7 @@ describe('Model Scoring and Disabling', () => {
             // Should only select from scored models that aren't disabled
             expect([
                 'gemini-3-flash-preview',
-                'gpt-5.2-chat-latest',
+                'gpt-5.5',
                 'claude-sonnet-4-6',
             ]).toContain(model);
         }
@@ -108,7 +108,7 @@ describe('Model Scoring and Disabling', () => {
 
     it('should work with getModelFromClass directly', async () => {
         const modelScores = {
-            'gpt-5.2-chat-latest': 100,
+            'gpt-5.5': 100,
             'gemini-3-flash-preview': 0, // Zero weight, should never be selected
         };
 
@@ -132,7 +132,7 @@ describe('Model Scoring and Disabling', () => {
         const agent: AgentDefinition = {
             modelClass: 'standard',
             modelScores: {
-                'gpt-5.2-chat-latest': 100, // Explicit high score
+                'gpt-5.5': 100, // Explicit high score
                 // Other models will get default score of 50
             },
         };
