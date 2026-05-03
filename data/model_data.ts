@@ -3272,6 +3272,82 @@ export const MODEL_REGISTRY: ModelEntry[] = [
         description: 'GPT OSS 20B - MoE model with 3.6B active params, optimized for consumer hardware',
     },
 
+    // Qwen3.6 Plus (via OpenRouter)
+    {
+        id: 'qwen/qwen3.6-plus',
+        aliases: ['Qwen 3.6', 'Qwen3.6', 'qwen3.6', 'qwen-3.6', 'qwen3.6-plus', 'qwen-3.6-plus'],
+        provider: 'openrouter',
+        openrouter_id: 'qwen/qwen3.6-plus',
+        cost: {
+            input_per_million: 0.325,
+            output_per_million: 1.95,
+        },
+        features: {
+            context_length: 1000000,
+            input_modality: ['text', 'image', 'video'],
+            output_modality: ['text'],
+            tool_use: true,
+            streaming: true,
+            json_output: true,
+            max_output_tokens: 65536,
+            reasoning_output: true,
+        },
+        class: 'reasoning',
+        description:
+            'Qwen3.6 Plus via OpenRouter. Flagship Qwen 3.6 model with 1M context, multimodal input, reasoning support, and strong agentic coding performance.',
+    },
+
+    // Qwen3.6 35B A3B (via OpenRouter)
+    {
+        id: 'qwen/qwen3.6-35b-a3b',
+        aliases: ['Qwen3.6 35B A3B', 'qwen3.6-35b-a3b', 'qwen-3.6-35b-a3b'],
+        provider: 'openrouter',
+        openrouter_id: 'qwen/qwen3.6-35b-a3b',
+        cost: {
+            input_per_million: 0.1612,
+            cached_input_per_million: 0.1612,
+            output_per_million: 0.96525,
+        },
+        features: {
+            context_length: 262144,
+            input_modality: ['text', 'image', 'video'],
+            output_modality: ['text'],
+            tool_use: true,
+            streaming: true,
+            json_output: true,
+            max_output_tokens: 65536,
+            reasoning_output: true,
+        },
+        class: 'reasoning',
+        description:
+            'Qwen3.6 35B A3B via OpenRouter. Open-weight multimodal sparse MoE model with 35B total parameters, 3B active parameters, and integrated thinking mode.',
+    },
+
+    // Qwen3.6 27B (via OpenRouter)
+    {
+        id: 'qwen/qwen3.6-27b',
+        aliases: ['Qwen3.6 27B', 'qwen3.6-27b', 'qwen-3.6-27b'],
+        provider: 'openrouter',
+        openrouter_id: 'qwen/qwen3.6-27b',
+        cost: {
+            input_per_million: 0.32,
+            output_per_million: 3.2,
+        },
+        features: {
+            context_length: 262144,
+            input_modality: ['text', 'image', 'video'],
+            output_modality: ['text'],
+            tool_use: true,
+            streaming: true,
+            json_output: true,
+            max_output_tokens: 81920,
+            reasoning_output: true,
+        },
+        class: 'reasoning',
+        description:
+            'Qwen3.6 27B via OpenRouter. Dense 27B multimodal model for coding, repository-level comprehension, and multi-step reasoning.',
+    },
+
     // Qwen3 235B A22B Thinking
     {
         id: 'qwen3-235b-a22b-thinking-2507',
@@ -3321,15 +3397,16 @@ export const MODEL_REGISTRY: ModelEntry[] = [
         description: 'Qwen3 Coder - 480B MoE model with 35B active params, optimized for agentic coding tasks',
     },
 
-    // GLM-5 (via OpenRouter)
+    // GLM-5.1 (via OpenRouter)
     {
-        id: 'z-ai/glm-5',
-        aliases: ['glm-5'],
+        id: 'z-ai/glm-5.1',
+        aliases: ['GLM-5.1', 'glm-5.1', 'glm-5', 'z-ai/glm-5'],
         provider: 'openrouter',
+        openrouter_id: 'z-ai/glm-5.1',
         cost: {
-            input_per_million: 0.8,
-            output_per_million: 2.56,
-            cached_input_per_million: 0.16,
+            input_per_million: 1.05,
+            output_per_million: 3.5,
+            cached_input_per_million: 0.525,
         },
         features: {
             context_length: 202752,
@@ -3338,10 +3415,64 @@ export const MODEL_REGISTRY: ModelEntry[] = [
             tool_use: true,
             streaming: true,
             json_output: true,
+            max_output_tokens: 65535,
+            reasoning_output: true,
         },
-        class: 'standard',
-        score: 83,
-        description: 'GLM-5 via OpenRouter. Large context text model from Z-AI for general-purpose reasoning tasks.',
+        class: 'reasoning',
+        description:
+            'GLM-5.1 via OpenRouter. Z.ai flagship text model for long-horizon autonomous coding and sustained agent workflows.',
+    },
+
+    // DeepSeek V4 Pro (via OpenRouter)
+    {
+        id: 'deepseek/deepseek-v4-pro',
+        aliases: ['DeepSeek-V4', 'DeepSeek-V4-Pro', 'deepseek-v4', 'deepseek-v4-pro'],
+        provider: 'openrouter',
+        openrouter_id: 'deepseek/deepseek-v4-pro',
+        cost: {
+            input_per_million: 0.435,
+            cached_input_per_million: 0.003625,
+            output_per_million: 0.87,
+        },
+        features: {
+            context_length: 1048576,
+            input_modality: ['text'],
+            output_modality: ['text'],
+            tool_use: true,
+            streaming: true,
+            json_output: true,
+            max_output_tokens: 384000,
+            reasoning_output: true,
+        },
+        class: 'reasoning',
+        description:
+            'DeepSeek V4 Pro via OpenRouter. 1.6T-parameter MoE model with 49B active parameters, 1M context, and high/xhigh reasoning support.',
+    },
+
+    // DeepSeek V4 Flash (via OpenRouter)
+    {
+        id: 'deepseek/deepseek-v4-flash',
+        aliases: ['DeepSeek-V4-Flash', 'deepseek-v4-flash'],
+        provider: 'openrouter',
+        openrouter_id: 'deepseek/deepseek-v4-flash',
+        cost: {
+            input_per_million: 0.14,
+            cached_input_per_million: 0.0028,
+            output_per_million: 0.28,
+        },
+        features: {
+            context_length: 1048576,
+            input_modality: ['text'],
+            output_modality: ['text'],
+            tool_use: true,
+            streaming: true,
+            json_output: true,
+            max_output_tokens: 384000,
+            reasoning_output: true,
+        },
+        class: 'reasoning',
+        description:
+            'DeepSeek V4 Flash via OpenRouter. Efficiency-optimized 284B-parameter MoE model with 13B active parameters and 1M context.',
     },
 
     // Kimi K2.5 (via OpenRouter)
@@ -3365,6 +3496,31 @@ export const MODEL_REGISTRY: ModelEntry[] = [
         class: 'reasoning',
         score: 86,
         description: 'MoonshotAI Kimi K2.5 via OpenRouter. Long-context text model with strong reasoning performance.',
+    },
+    // Kimi K2.6 (via OpenRouter)
+    {
+        id: 'moonshotai/kimi-k2.6',
+        aliases: ['Kimi K2.6', 'kimi-k2.6', 'kimi-k2-6'],
+        provider: 'openrouter',
+        openrouter_id: 'moonshotai/kimi-k2.6',
+        cost: {
+            input_per_million: 0.74,
+            output_per_million: 3.49,
+            cached_input_per_million: 0.14,
+        },
+        features: {
+            context_length: 262142,
+            input_modality: ['text', 'image'],
+            output_modality: ['text'],
+            tool_use: true,
+            streaming: true,
+            json_output: true,
+            max_output_tokens: 262142,
+            reasoning_output: true,
+        },
+        class: 'reasoning',
+        description:
+            'MoonshotAI Kimi K2.6 via OpenRouter. Multimodal long-horizon coding and multi-agent orchestration model with 262K context.',
     },
 ];
 

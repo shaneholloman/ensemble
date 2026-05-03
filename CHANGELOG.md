@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-05-03
+- Added current OpenRouter model entries for GLM-5.1, Kimi K2.6, DeepSeek V4 Pro/Flash, and Qwen3.6 Plus/35B/27B with pricing, context, modality, and alias metadata.
+- Updated legacy GLM-5 aliases to resolve to the current GLM-5.1 OpenRouter model.
+
 ## 2026-04-06
 - Refreshed direct package dependencies and lockfile to current compatible releases, including `openai`, `@anthropic-ai/sdk`, `@google/genai`, `vitest`, and lint/build tooling.
 - Added full xAI Grok Imagine image support for `grok-imagine-image` and `grok-imagine-image-pro`, including JSON-based image editing via `/images/edits`.
