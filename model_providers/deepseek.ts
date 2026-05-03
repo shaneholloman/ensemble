@@ -13,6 +13,7 @@
 
 import { OpenAIChat } from './openai_chat.js'; // Adjust path as needed
 import OpenAI from 'openai';
+import { appendJsonSchemaInstruction, getJsonSchemaFromResponseFormat } from '../utils/structured_output.js';
 
 // Define a type alias for message parameters for clarity
 type MessageParam = OpenAI.Chat.Completions.ChatCompletionMessageParam;
@@ -35,6 +36,8 @@ export class DeepSeekProvider extends OpenAIChat {
     prepareParameters(
         requestParams: OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming
     ): OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming {
+        const jsonSchema = getJsonSchemaFromResponseFormat(requestParams.response_format);
+
         // Check if the specific 'deepseek-reasoner' model is being used
         if (requestParams.model === 'deepseek-reasoner') {
             // --- Parameter Adjustments ---
@@ -147,11 +150,20 @@ export class DeepSeekProvider extends OpenAIChat {
                 });
             }
 
+            if (jsonSchema) {
+                finalMessages = appendJsonSchemaInstruction(finalMessages, jsonSchema);
+            }
+
             // Assign the processed messages back to the request parameters
             requestParams.messages = finalMessages;
         } else {
             // If not 'deepseek-reasoner', delegate to the parent class's preparation
-            return super.prepareParameters(requestParams);
+            requestParams = super.prepareParameters(requestParams);
+            if (jsonSchema) {
+                requestParams.response_format = { type: 'json_object' } as any;
+                requestParams.messages = appendJsonSchemaInstruction(requestParams.messages, jsonSchema);
+            }
+            return requestParams;
         }
         // Return the modified parameters
         return requestParams;

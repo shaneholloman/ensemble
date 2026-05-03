@@ -66,13 +66,26 @@ interface FailureNormalizationOptions extends Partial<Omit<FailureClassification
     retryableStatusCodes?: Iterable<number>;
 }
 
+function stringifyFailureMessage(value: unknown): string {
+    if (typeof value === 'string') return value;
+    if (value instanceof Error) return value.message;
+    if (value === undefined) return 'Unknown error';
+    if (value === null) return 'null';
+
+    try {
+        return JSON.stringify(value);
+    } catch {
+        return String(value);
+    }
+}
+
 export function normalizeFailure(
     failure: unknown,
     overrides: FailureNormalizationOptions = {}
 ): FailureClassification {
     const candidate = failure as {
-        error?: string;
-        message?: string;
+        error?: unknown;
+        message?: unknown;
         code?: string;
         status?: number;
         details?: unknown;
@@ -83,11 +96,12 @@ export function normalizeFailure(
 
     const code = overrides.code ?? candidate?.code;
     let recoverable = overrides.recoverable ?? candidate?.recoverable;
-    const message =
+    const rawMessage =
         overrides.error ??
         candidate?.error ??
         candidate?.message ??
-        (failure instanceof Error ? failure.message : String(failure));
+        (failure instanceof Error ? failure.message : failure);
+    const message = stringifyFailureMessage(rawMessage);
 
     if (
         recoverable === undefined &&

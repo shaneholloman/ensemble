@@ -29,6 +29,7 @@ import { createCitationTracker, formatCitation, generateFootnotes } from '../uti
 import { hasEventHandler } from '../utils/event_controller.js';
 import { createProviderErrorEvent } from '../utils/failure_detection.js';
 import { findModel } from '../data/model_data.js';
+import { createChatJsonSchemaResponseFormat } from '../utils/structured_output.js';
 
 // Extended types for Perplexity/OpenRouter response formats
 interface ExtendedDelta extends OpenAI.Chat.Completions.ChatCompletionChunk.Choice.Delta {
@@ -677,10 +678,7 @@ export class OpenAIChat extends BaseModelProvider {
                 requestParams.tool_choice =
                     settings.tool_choice as OpenAI.Chat.Completions.ChatCompletionToolChoiceOption;
             if (settings?.json_schema) {
-                requestParams.response_format = {
-                    type: 'json_schema',
-                    json_schema: settings.json_schema,
-                };
+                requestParams.response_format = createChatJsonSchemaResponseFormat(settings.json_schema) as any;
             }
             // Check model features to determine tool support
             const modelEntry = findModel(model);

@@ -1,0 +1,127 @@
+import { describe, expect, it, vi } from 'vitest';
+import { DeepSeekProvider } from '../model_providers/deepseek.js';
+import { OpenAIChat } from '../model_providers/openai_chat.js';
+
+async function drain(stream: AsyncIterable<unknown>): Promise<void> {
+    for await (const _event of stream) {
+        // Request formatting happens before the mocked stream is consumed.
+    }
+}
+
+function completionStream(content = '{}') {
+    return {
+        async *[Symbol.asyncIterator]() {
+            yield {
+                choices: [
+                    {
+                        delta: {
+                            content,
+                        },
+                        finish_reason: 'stop',
+                    },
+                ],
+            };
+        },
+    };
+}
+
+function attachMockChatClient(provider: unknown) {
+    const create = vi.fn().mockResolvedValue(completionStream());
+    (provider as any)._client = {
+        chat: {
+            completions: {
+                create,
+            },
+        },
+    };
+    return create;
+}
+
+const jsonSchema = {
+    name: 'answer_result',
+    type: 'json_schema' as const,
+    strict: true,
+    schema: {
+        type: 'object',
+        properties: {
+            answer: { type: 'string' },
+            note: { type: 'string', optional: true },
+        },
+        additionalProperties: false,
+    },
+};
+
+describe('OpenAI chat structured output request formatting', () => {
+    it('sends OpenRouter/OpenAI-compatible json_schema without the Ensemble wrapper type inside json_schema', async () => {
+        const provider = new OpenAIChat('openrouter', 'test-openrouter-key', 'https://openrouter.ai/api/v1');
+        const create = attachMockChatClient(provider);
+
+        await drain(
+            provider.createResponseStream(
+                [{ type: 'message', role: 'user', content: 'Return JSON' }] as any,
+                'deepseek/deepseek-v4-pro',
+                {
+                    agent_id: 'test-openrouter-structured-output',
+                    modelSettings: {
+                        json_schema: jsonSchema,
+                    },
+                } as any
+            )
+        );
+
+        const requestParams = create.mock.calls.at(0)?.[0];
+        expect(requestParams.response_format.type).toBe('json_schema');
+        expect(requestParams.response_format.json_schema.type).toBeUndefined();
+        expect(requestParams.response_format.json_schema.name).toBe('answer_result');
+        expect(requestParams.response_format.json_schema.strict).toBe(true);
+        expect(requestParams.response_format.json_schema.schema.required).toEqual(['answer', 'note']);
+    });
+
+    it('maps direct DeepSeek schema requests to json_object and carries the schema in the prompt', async () => {
+        const provider = new DeepSeekProvider();
+        const create = attachMockChatClient(provider);
+
+        await drain(
+            provider.createResponseStream(
+                [{ type: 'message', role: 'user', content: 'Return the result' }] as any,
+                'deepseek-chat',
+                {
+                    agent_id: 'test-deepseek-json-object',
+                    modelSettings: {
+                        json_schema: jsonSchema,
+                    },
+                } as any
+            )
+        );
+
+        const requestParams = create.mock.calls.at(0)?.[0];
+        expect(requestParams.response_format).toEqual({ type: 'json_object' });
+        expect(JSON.stringify(requestParams.response_format)).not.toContain('json_schema');
+        expect(requestParams.messages.at(-1).role).toBe('system');
+        expect(requestParams.messages.at(-1).content).toContain('Respond only with valid JSON.');
+        expect(requestParams.messages.at(-1).content).toContain('"answer"');
+    });
+
+    it('keeps DeepSeek reasoner off provider JSON mode while still adding explicit JSON instructions', async () => {
+        const provider = new DeepSeekProvider();
+        const create = attachMockChatClient(provider);
+
+        await drain(
+            provider.createResponseStream(
+                [{ type: 'message', role: 'user', content: 'Return the result' }] as any,
+                'deepseek-reasoner',
+                {
+                    agent_id: 'test-deepseek-reasoner-json-prompt',
+                    modelSettings: {
+                        json_schema: jsonSchema,
+                    },
+                } as any
+            )
+        );
+
+        const requestParams = create.mock.calls.at(0)?.[0];
+        expect(requestParams.response_format).toBeUndefined();
+        expect(requestParams.messages.at(-1).role).toBe('system');
+        expect(requestParams.messages.at(-1).content).toContain('Respond only with valid JSON.');
+    });
+});
