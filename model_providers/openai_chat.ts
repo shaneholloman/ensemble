@@ -826,7 +826,7 @@ export class OpenAIChat extends BaseModelProvider {
                     // Handle reasoning content (Perplexity/OpenRouter format)
                     const extendedDelta = delta as ExtendedDelta;
                     if (extendedDelta.reasoning) {
-                        aggregatedContent += extendedDelta.reasoning;
+                        aggregatedThinking += extendedDelta.reasoning;
                         for (const ev of bufferDelta(
                             deltaBuffers,
                             messageId,
@@ -834,8 +834,9 @@ export class OpenAIChat extends BaseModelProvider {
                             content =>
                                 ({
                                     type: 'message_delta',
-                                    content,
+                                    content: '',
                                     message_id: messageId,
+                                    thinking_content: content,
                                     order: messageIndex++,
                                 }) as ProviderStreamEvent
                         )) {
