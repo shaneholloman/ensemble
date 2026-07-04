@@ -354,6 +354,13 @@ export interface MessageEventBase extends StreamEventBase {
     order?: number; // Optional order property for message sorting
     thinking_content?: string;
     thinking_signature?: string;
+    /**
+     * Provider-reported stop reason on message_complete (e.g. 'end_turn',
+     * 'max_tokens', 'stop_sequence'). Lets callers detect truncation without
+     * parsing provider internals. Refusals never reach message_complete —
+     * they are surfaced as a typed error event instead.
+     */
+    stop_reason?: string;
 }
 
 /**

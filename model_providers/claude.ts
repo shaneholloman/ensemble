@@ -827,6 +827,11 @@ export class ClaudeProvider extends BaseModelProvider {
             let accumulatedSignature = '';
             let accumulatedThinking = '';
             let accumulatedContent = ''; // To collect all content for final message_complete
+            // Terminal stop metadata reported by the API on message_delta. Refusals
+            // (stop_reason 'refusal') arrive with an EMPTY content array, so without
+            // reading this the stream ends with no terminal event at all.
+            let finalStopReason: string | null = null;
+            let finalStopDetails: { type?: string; category?: string; explanation?: string } | null = null;
             const messageId = uuidv4(); // Generate a unique ID for this message
             // Track delta positions for ordered message chunks
             let deltaPosition = 0;
@@ -878,6 +883,14 @@ export class ClaudeProvider extends BaseModelProvider {
                         totalOutputTokens += usage.output_tokens || 0;
                         totalCacheCreationInputTokens += usage.cache_creation_input_tokens || 0;
                         totalCacheReadInputTokens += usage.cache_read_input_tokens || 0;
+                    }
+
+                    // Capture terminal stop metadata from message_delta (independent of
+                    // usage presence). stop_details carries the refusal category.
+                    if (event.type === 'message_delta' && event.delta?.stop_reason) {
+                        finalStopReason = event.delta.stop_reason;
+                        finalStopDetails =
+                            (event.delta as { stop_details?: typeof finalStopDetails }).stop_details ?? null;
                     }
 
                     // --- Handle Content and Tool Events ---
@@ -1110,8 +1123,29 @@ export class ClaudeProvider extends BaseModelProvider {
                         )) {
                             yield ev;
                         }
-                        // Emit message_complete if there's content
-                        if (accumulatedContent || accumulatedThinking) {
+                        // Emit a terminal event. A refusal ends the turn with an empty
+                        // content array, and a thinking-only max_tokens truncation ends it
+                        // with no text — in both cases callers would otherwise see the
+                        // stream end with no message_complete and no error, and hang or
+                        // fail with a misleading "empty response".
+                        if (finalStopReason === 'refusal') {
+                            const detailParts = [
+                                finalStopDetails?.category ? `category: ${finalStopDetails.category}` : null,
+                                finalStopDetails?.explanation || null,
+                            ].filter(Boolean);
+                            const refusalError =
+                                `Claude refused the request (stop_reason: refusal` +
+                                `${detailParts.length ? `; ${detailParts.join('; ')}` : ''}).`;
+                            log_llm_error(requestId, refusalError);
+                            yield {
+                                type: 'error',
+                                error: refusalError,
+                                code: 'refusal',
+                                details: { stop_reason: finalStopReason, stop_details: finalStopDetails },
+                                recoverable: false, // refusals are deterministic per payload; retrying wastes attempts
+                            };
+                            messageCompleteYielded = true; // Terminal outcome delivered; suppress fallback emission
+                        } else if (accumulatedContent || accumulatedThinking) {
                             // Add footnotes if there are citations
                             if (citationTracker.citations.size > 0) {
                                 const footnotes = generateFootnotes(citationTracker);
@@ -1124,8 +1158,29 @@ export class ClaudeProvider extends BaseModelProvider {
                                 content: accumulatedContent,
                                 thinking_content: accumulatedThinking,
                                 thinking_signature: accumulatedSignature,
+                                ...(finalStopReason ? { stop_reason: finalStopReason } : {}),
                             };
                             messageCompleteYielded = true; // Mark that it was yielded here
+                        } else if (!toolCallStarted && !currentToolCall) {
+                            // No content, no thinking, no tool calls: emit a typed error
+                            // naming the stop_reason so the caller gets a terminal event.
+                            const budgetHint =
+                                finalStopReason === 'max_tokens'
+                                    ? ' The output token budget was exhausted before any text was emitted' +
+                                      ' (likely consumed by thinking); increase max_tokens.'
+                                    : '';
+                            const emptyError =
+                                `Claude stream ended without content, thinking, or tool calls ` +
+                                `(stop_reason: ${finalStopReason ?? 'unknown'}).${budgetHint}`;
+                            log_llm_error(requestId, emptyError);
+                            yield {
+                                type: 'error',
+                                error: emptyError,
+                                code: finalStopReason === 'max_tokens' ? 'max_tokens_no_output' : 'empty_response',
+                                details: { stop_reason: finalStopReason, stop_details: finalStopDetails },
+                                recoverable: false,
+                            };
+                            messageCompleteYielded = true; // Terminal outcome delivered; suppress fallback emission
                         }
                         streamCompletedSuccessfully = true; // Mark stream as complete
                         // **Cost tracking moved after the loop**
@@ -1182,6 +1237,7 @@ export class ClaudeProvider extends BaseModelProvider {
                         content: accumulatedContent,
                         thinking_content: accumulatedThinking,
                         thinking_signature: accumulatedSignature,
+                        ...(finalStopReason ? { stop_reason: finalStopReason } : {}),
                     };
                     messageCompleteYielded = true; // Mark as yielded here too
                 }
