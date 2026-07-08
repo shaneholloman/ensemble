@@ -53,7 +53,7 @@ export const MODEL_CLASSES = {
             'gpt-5.5', // OpenAI
             'gemini-3-flash-preview', // Google
             'claude-sonnet-5', // Anthropic
-            'grok-4.3', // X.AI
+            'grok-4.5', // X.AI
         ],
         random: true,
     },
@@ -76,7 +76,7 @@ export const MODEL_CLASSES = {
             'gpt-5.5', // OpenAI
             'gemini-2.5-pro', // Google
             'claude-sonnet-5', // Anthropic
-            'grok-4.3', // X.AI
+            'grok-4.5', // X.AI
         ],
         random: true,
     },
@@ -87,7 +87,7 @@ export const MODEL_CLASSES = {
             'gpt-5.5-pro', // OpenAI
             'gemini-3.1-pro-preview', // Google
             'claude-fable-5', // Anthropic
-            'grok-4.3', // X.AI
+            'grok-4.5', // X.AI
         ],
         random: true,
     },
@@ -109,7 +109,7 @@ export const MODEL_CLASSES = {
             'gpt-5.5', // OpenAI
             'gemini-3.1-pro-preview', // Google
             'claude-sonnet-5', // Anthropic
-            'grok-4.3', // X.AI
+            'grok-4.5', // X.AI
         ],
         random: true,
     },
@@ -120,7 +120,7 @@ export const MODEL_CLASSES = {
             'gpt-5.5', // OpenAI
             'gemini-3.1-pro-preview', // Google
             'claude-fable-5', // Anthropic
-            'grok-4.3', // X.AI
+            'grok-4.5', // X.AI
         ],
         random: true,
     },
@@ -131,7 +131,7 @@ export const MODEL_CLASSES = {
             'gpt-5.3-codex', // OpenAI
             'gemini-3.1-pro-preview', // Google
             'claude-fable-5', // Anthropic
-            'grok-4.3', // X.AI
+            'grok-4.5', // X.AI
             'qwen3-coder', // OpenRouter
         ],
         random: true,
@@ -143,7 +143,7 @@ export const MODEL_CLASSES = {
             'gpt-5.5', // OpenAI
             'gemini-3-flash-preview', // Google
             'claude-sonnet-5', // Anthropic
-            'grok-4.3', // X.AI
+            'grok-4.5', // X.AI
         ],
         random: true,
     },
@@ -166,7 +166,7 @@ export const MODEL_CLASSES = {
             'gpt-5.5', // OpenAI
             'gemini-3.1-pro-preview', // Google
             'claude-fable-5', // Anthropic
-            'grok-4.3', // X.AI
+            'grok-4.5', // X.AI
         ],
         random: true,
     },
@@ -604,6 +604,29 @@ export const MODEL_REGISTRY: ModelEntry[] = [
     //
 
     {
+        id: 'grok-4.5',
+        aliases: ['grok-4.5-latest', 'grok-build-latest'],
+        provider: 'xai',
+        cost: {
+            input_per_million: 2.0,
+            output_per_million: 6.0,
+            cached_input_per_million: 0.5,
+        },
+        features: {
+            context_length: 500_000,
+            input_modality: ['text', 'image'],
+            output_modality: ['text'],
+            tool_use: true,
+            streaming: true,
+            json_output: true,
+            reasoning_output: true,
+        },
+        class: 'reasoning',
+        description:
+            "Grok 4.5, xAI's flagship model for code and general chat with 500k context, multimodal input, tools, structured output, and configurable low/medium/high reasoning.",
+    },
+
+    {
         id: 'grok-4.3',
         provider: 'xai',
         cost: {
@@ -625,7 +648,7 @@ export const MODEL_REGISTRY: ModelEntry[] = [
 
     {
         id: 'grok-build-0.1',
-        aliases: ['grok-build', 'grok-build-latest'],
+        aliases: ['grok-build'],
         provider: 'xai',
         cost: {
             input_per_million: 1.0,

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { MODEL_CLASSES, findModel } from '../data/model_data.js';
+import { findModel } from '../data/model_data.js';
 import { GrokProvider } from '../model_providers/grok.js';
 import { getModelFromAgent, getProviderFromModel } from '../model_providers/model_provider.js';
 
@@ -38,18 +38,6 @@ describe('Grok 4.3 support', () => {
         });
     });
 
-    it('uses Grok 4.3 as the xAI default for strong text and vision classes', () => {
-        expect(MODEL_CLASSES.standard.models[3]).toBe('grok-4.3');
-        expect(MODEL_CLASSES.reasoning.models[3]).toBe('grok-4.3');
-        expect(MODEL_CLASSES.reasoning_high.models[3]).toBe('grok-4.3');
-        expect(MODEL_CLASSES.monologue.models[3]).toBe('grok-4.3');
-        expect(MODEL_CLASSES.metacognition.models[3]).toBe('grok-4.3');
-        expect(MODEL_CLASSES.code.models[3]).toBe('grok-4.3');
-        expect(MODEL_CLASSES.writing.models[3]).toBe('grok-4.3');
-        expect(MODEL_CLASSES.vision.models[3]).toBe('grok-4.3');
-        expect(MODEL_CLASSES.long.models[3]).toBe('grok-4.3');
-    });
-
     it('routes Grok 4.3 through the xAI provider and preserves reasoning suffixes', async () => {
         expect(getProviderFromModel('grok-4.3')).toBe('xai');
         expect(await getModelFromAgent({ agent_id: 'test-grok-4.3-high', model: 'grok-4.3-high' } as any)).toBe(
@@ -78,7 +66,7 @@ describe('Grok 4.3 support', () => {
             class: 'code',
         });
         expect(getProviderFromModel('grok-build-0.1')).toBe('xai');
-        expect(await getModelFromAgent({ agent_id: 'test-grok-build', model: 'grok-build-latest' } as any)).toBe(
+        expect(await getModelFromAgent({ agent_id: 'test-grok-build', model: 'grok-build' } as any)).toBe(
             'grok-build-0.1'
         );
     });
