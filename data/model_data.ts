@@ -52,7 +52,7 @@ export const MODEL_CLASSES = {
             // One top pick per provider (prefer stable IDs over dated previews when possible)
             'gpt-5.5', // OpenAI
             'gemini-3-flash-preview', // Google
-            'claude-sonnet-4-6', // Anthropic
+            'claude-sonnet-5', // Anthropic
             'grok-4.3', // X.AI
         ],
         random: true,
@@ -75,7 +75,7 @@ export const MODEL_CLASSES = {
             // Strong reasoning at reasonable cost
             'gpt-5.5', // OpenAI
             'gemini-2.5-pro', // Google
-            'claude-sonnet-4-6', // Anthropic
+            'claude-sonnet-5', // Anthropic
             'grok-4.3', // X.AI
         ],
         random: true,
@@ -97,7 +97,7 @@ export const MODEL_CLASSES = {
         models: [
             'gpt-5.4-mini', // OpenAI
             'gemini-3-flash-preview', // Google
-            'claude-sonnet-4-6', // Anthropic
+            'claude-sonnet-5', // Anthropic
             'grok-3-mini', // X.AI
         ],
         random: true,
@@ -108,7 +108,7 @@ export const MODEL_CLASSES = {
         models: [
             'gpt-5.5', // OpenAI
             'gemini-3.1-pro-preview', // Google
-            'claude-sonnet-4-6', // Anthropic
+            'claude-sonnet-5', // Anthropic
             'grok-4.3', // X.AI
         ],
         random: true,
@@ -142,7 +142,7 @@ export const MODEL_CLASSES = {
         models: [
             'gpt-5.5', // OpenAI
             'gemini-3-flash-preview', // Google
-            'claude-sonnet-4-6', // Anthropic
+            'claude-sonnet-5', // Anthropic
             'grok-4.3', // X.AI
         ],
         random: true,
@@ -234,7 +234,7 @@ export const MODEL_CLASSES = {
             // One top pick per TTS provider
             'tts-1-hd', // OpenAI
             'eleven_multilingual_v2', // ElevenLabs
-            'gemini-2.5-pro-preview-tts', // Gemini
+            'gemini-3.1-flash-tts-preview', // Gemini
         ],
         description: 'Text-to-Speech models for voice generation',
     },
@@ -243,7 +243,7 @@ export const MODEL_CLASSES = {
             'gpt-realtime-whisper', // OpenAI
             'gpt-4o-transcribe', // OpenAI
             'u3-rt-pro', // AssemblyAI
-            'gemini-2.5-flash-native-audio-preview-12-2025', // Gemini (replacement for Live)
+            'gemini-3.1-flash-live-preview', // Gemini Live
         ],
         description: 'Speech-to-Text models for audio transcription with real-time streaming',
     },
@@ -1975,7 +1975,7 @@ export const MODEL_REGISTRY: ModelEntry[] = [
     // Claude Sonnet 4.6
     {
         id: 'claude-sonnet-4-6',
-        aliases: ['claude-sonnet-4-6', 'claude-sonnet-4.6', 'claude-sonnet-latest', 'sonnet-4-6', 'sonnet-4.6'],
+        aliases: ['claude-sonnet-4-6', 'claude-sonnet-4.6', 'sonnet-4-6', 'sonnet-4.6'],
         provider: 'anthropic',
         cost: {
             input_per_million: 3.0,
@@ -1995,6 +1995,37 @@ export const MODEL_REGISTRY: ModelEntry[] = [
         class: 'reasoning',
         score: 94,
         description: 'Claude Sonnet 4.6 with updated reasoning and multimodal capabilities.',
+    },
+
+    // Claude Sonnet 5
+    {
+        id: 'claude-sonnet-5',
+        aliases: ['claude-sonnet-latest', 'sonnet-5', 'sonnet-5-latest'],
+        provider: 'anthropic',
+        cost: {
+            input_per_million: 2.0,
+            output_per_million: 10.0,
+            cached_input_per_million: 0.2,
+        },
+        features: {
+            context_length: 1_000_000,
+            input_modality: ['text', 'image'],
+            output_modality: ['text'],
+            tool_use: true,
+            streaming: true,
+            json_output: true,
+            reasoning_output: true,
+            max_output_tokens: 128000,
+        },
+        class: 'reasoning',
+        score: 96,
+        scores: {
+            monologue: 95,
+            code: 96,
+            reasoning: 95,
+        },
+        description:
+            'Claude Sonnet 5 - latest Sonnet model with 1M context, 128K output, vision support, and implicit adaptive thinking controls.',
     },
 
     {
@@ -2882,6 +2913,23 @@ export const MODEL_REGISTRY: ModelEntry[] = [
         description:
             "Gemini's advanced text-to-speech model with superior voice quality, expression control, and multi-speaker support for creating dynamic conversations.",
     },
+    {
+        id: 'gemini-3.1-flash-tts-preview',
+        provider: 'google',
+        cost: {
+            input_per_million: 10.0,
+            output_per_million: 0,
+        },
+        features: {
+            input_modality: ['text'],
+            output_modality: ['audio'],
+            streaming: true,
+            context_length: 32000,
+        },
+        class: 'voice',
+        description:
+            'Gemini 3.1 Flash TTS preview for low-latency speech generation with steerable prompts and expressive audio tags.',
+    },
 
     {
         id: 'gemini-2.5-flash-native-audio-preview',
@@ -2900,6 +2948,22 @@ export const MODEL_REGISTRY: ModelEntry[] = [
         class: 'voice',
         description:
             "Gemini's native audio preview model providing low-latency text-to-speech with built-in audio processing.",
+    },
+    {
+        id: 'gemini-omni-flash',
+        provider: 'google',
+        cost: {
+            input_per_million: 0,
+            output_per_million: 0,
+        },
+        features: {
+            input_modality: ['text', 'image', 'audio', 'video'],
+            output_modality: ['text', 'image', 'audio'],
+            streaming: true,
+        },
+        class: 'standard',
+        description:
+            'Gemini Omni Flash preview for multimodal, conversational generation and editing across text, image, audio, and video inputs.',
     },
 
     // Perplexity Sonar models
@@ -3275,6 +3339,30 @@ export const MODEL_REGISTRY: ModelEntry[] = [
         description: 'Gemini Live API for real-time multimodal interaction with modality-specific pricing',
     },
     {
+        id: 'gemini-3.1-flash-live-preview',
+        provider: 'google',
+        cost: {
+            input_per_million: {
+                text: 0.5,
+                audio: 3.0,
+                video: 3.0,
+            },
+            output_per_million: {
+                text: 2.0,
+                audio: 12.0,
+            },
+        },
+        features: {
+            context_length: 32000,
+            input_modality: ['text', 'audio', 'video'],
+            output_modality: ['text', 'audio'],
+            streaming: true,
+        },
+        class: 'transcription',
+        description:
+            'Gemini 3.1 Flash Live preview for high-quality, low-latency audio-to-audio realtime dialogue and voice-first applications.',
+    },
+    {
         id: 'gemini-2.0-flash-live-001',
         provider: 'google',
         cost: {
@@ -3458,8 +3546,8 @@ export const MODEL_REGISTRY: ModelEntry[] = [
         provider: 'openrouter',
         openrouter_id: 'openai/gpt-oss-120b',
         cost: {
-            input_per_million: 0.039,
-            output_per_million: 0.18,
+            input_per_million: 0.03,
+            output_per_million: 0.15,
         },
         features: {
             context_length: 131072,
@@ -3522,6 +3610,32 @@ export const MODEL_REGISTRY: ModelEntry[] = [
         class: 'code',
         description:
             'Qwen3.7 Max via OpenRouter. Flagship Qwen 3.7 model for agent-centric coding, productivity, and long-horizon autonomous execution.',
+    },
+
+    // Qwen3.7 Plus (via OpenRouter)
+    {
+        id: 'qwen/qwen3.7-plus',
+        aliases: ['Qwen3.7 Plus', 'qwen3.7-plus', 'qwen-3.7-plus'],
+        provider: 'openrouter',
+        openrouter_id: 'qwen/qwen3.7-plus',
+        cost: {
+            input_per_million: 0.32,
+            cached_input_per_million: 0.064,
+            output_per_million: 1.28,
+        },
+        features: {
+            context_length: 1000000,
+            input_modality: ['text', 'image'],
+            output_modality: ['text'],
+            tool_use: true,
+            streaming: true,
+            json_output: true,
+            max_output_tokens: 65536,
+            reasoning_output: true,
+        },
+        class: 'reasoning',
+        description:
+            'Qwen3.7 Plus via OpenRouter. Current multimodal Qwen 3.7 model with 1M context for agentic workflows and visual reasoning.',
     },
 
     // Qwen3.6 Plus (via OpenRouter)
@@ -3591,7 +3705,7 @@ export const MODEL_REGISTRY: ModelEntry[] = [
             tool_use: true,
             streaming: true,
             json_output: true,
-            max_output_tokens: 262140,
+            max_output_tokens: 262144,
             reasoning_output: true,
         },
         class: 'reasoning',
@@ -3632,8 +3746,9 @@ export const MODEL_REGISTRY: ModelEntry[] = [
         provider: 'openrouter',
         openrouter_id: 'qwen/qwen3.6-27b',
         cost: {
-            input_per_million: 0.29,
-            output_per_million: 3.2,
+            input_per_million: 0.285,
+            cached_input_per_million: 0.15,
+            output_per_million: 2.4,
         },
         features: {
             context_length: 262144,
@@ -3703,13 +3818,13 @@ export const MODEL_REGISTRY: ModelEntry[] = [
     // GLM-5.1 (via OpenRouter)
     {
         id: 'z-ai/glm-5.1',
-        aliases: ['GLM-5.1', 'glm-5.1', 'glm-5', 'z-ai/glm-5'],
+        aliases: ['GLM-5.1', 'glm-5.1'],
         provider: 'openrouter',
         openrouter_id: 'z-ai/glm-5.1',
         cost: {
-            input_per_million: 0.98,
-            output_per_million: 3.08,
-            cached_input_per_million: 0.182,
+            input_per_million: 0.966,
+            output_per_million: 3.036,
+            cached_input_per_million: 0.1794,
         },
         features: {
             context_length: 202752,
@@ -3723,6 +3838,32 @@ export const MODEL_REGISTRY: ModelEntry[] = [
         class: 'reasoning',
         description:
             'GLM-5.1 via OpenRouter. Z.ai flagship text model for long-horizon autonomous coding and sustained agent workflows.',
+    },
+
+    // GLM-5.2 (via OpenRouter)
+    {
+        id: 'z-ai/glm-5.2',
+        aliases: ['GLM-5.2', 'glm-5.2', 'glm-5'],
+        provider: 'openrouter',
+        openrouter_id: 'z-ai/glm-5.2',
+        cost: {
+            input_per_million: 0.93,
+            output_per_million: 3.0,
+            cached_input_per_million: 0.18,
+        },
+        features: {
+            context_length: 1048576,
+            input_modality: ['text'],
+            output_modality: ['text'],
+            tool_use: true,
+            streaming: true,
+            json_output: true,
+            max_output_tokens: 32768,
+            reasoning_output: true,
+        },
+        class: 'reasoning',
+        description:
+            'GLM-5.2 via OpenRouter. Z.ai 1M-context text model for long-horizon autonomous coding and sustained agent workflows.',
     },
 
     // DeepSeek V4 Pro (via OpenRouter)
@@ -3758,9 +3899,9 @@ export const MODEL_REGISTRY: ModelEntry[] = [
         provider: 'openrouter',
         openrouter_id: 'deepseek/deepseek-v4-flash',
         cost: {
-            input_per_million: 0.0983,
-            cached_input_per_million: 0.0197,
-            output_per_million: 0.1966,
+            input_per_million: 0.09,
+            cached_input_per_million: 0.018,
+            output_per_million: 0.18,
         },
         features: {
             context_length: 1048576,
@@ -3784,8 +3925,8 @@ export const MODEL_REGISTRY: ModelEntry[] = [
         provider: 'openrouter',
         openrouter_id: 'xiaomi/mimo-v2.5',
         cost: {
-            input_per_million: 0.14,
-            cached_input_per_million: 0.0028,
+            input_per_million: 0.105,
+            cached_input_per_million: 0.028,
             output_per_million: 0.28,
         },
         features: {
@@ -3856,16 +3997,16 @@ export const MODEL_REGISTRY: ModelEntry[] = [
             'MiniMax M3 via OpenRouter. Multimodal 1M-context foundation model for long-horizon agentic work, coding, and video-aware reasoning.',
     },
 
-    // Tencent Hy3 preview (via OpenRouter)
+    // Tencent Hy3 (via OpenRouter)
     {
-        id: 'tencent/hy3-preview',
-        aliases: ['Tencent Hy3 Preview', 'Hy3 Preview', 'Hy3-preview', 'hy3-preview'],
+        id: 'tencent/hy3',
+        aliases: ['Tencent Hy3', 'Hy3', 'hy3', 'Tencent Hy3 Preview', 'Hy3 Preview', 'Hy3-preview', 'hy3-preview'],
         provider: 'openrouter',
-        openrouter_id: 'tencent/hy3-preview',
+        openrouter_id: 'tencent/hy3',
         cost: {
-            input_per_million: 0.063,
-            cached_input_per_million: 0.021,
-            output_per_million: 0.21,
+            input_per_million: 0.2,
+            cached_input_per_million: 0.5,
+            output_per_million: 0.8,
         },
         features: {
             context_length: 262144,
@@ -3874,11 +4015,12 @@ export const MODEL_REGISTRY: ModelEntry[] = [
             tool_use: true,
             streaming: true,
             json_output: false,
+            max_output_tokens: 131072,
             reasoning_output: true,
         },
         class: 'reasoning',
         description:
-            'Tencent Hy3 preview via OpenRouter. High-efficiency MoE model for agentic workflows with configurable disabled, low, and high reasoning modes.',
+            'Tencent Hy3 via OpenRouter. High-efficiency text model for agentic workflows with configurable disabled, low, and high reasoning modes.',
     },
 
     // Kimi K2.5 (via OpenRouter)
@@ -3887,9 +4029,9 @@ export const MODEL_REGISTRY: ModelEntry[] = [
         aliases: ['kimi-k2.5', 'kimi-k2-5'],
         provider: 'openrouter',
         cost: {
-            input_per_million: 0.4,
-            output_per_million: 1.9,
-            cached_input_per_million: 0.09,
+            input_per_million: 0.375,
+            output_per_million: 2.025,
+            cached_input_per_million: 0.203,
         },
         features: {
             context_length: 262144,
@@ -3911,9 +4053,9 @@ export const MODEL_REGISTRY: ModelEntry[] = [
         provider: 'openrouter',
         openrouter_id: 'moonshotai/kimi-k2.6',
         cost: {
-            input_per_million: 0.684,
-            output_per_million: 3.42,
-            cached_input_per_million: 0.144,
+            input_per_million: 0.66,
+            output_per_million: 3.41,
+            cached_input_per_million: 0.14,
         },
         features: {
             context_length: 262144,
@@ -3928,6 +4070,31 @@ export const MODEL_REGISTRY: ModelEntry[] = [
         class: 'reasoning',
         description:
             'MoonshotAI Kimi K2.6 via OpenRouter. Multimodal long-horizon coding and multi-agent orchestration model with 262K context.',
+    },
+    // Kimi K2.7 Code (via OpenRouter)
+    {
+        id: 'moonshotai/kimi-k2.7-code',
+        aliases: ['Kimi K2.7 Code', 'kimi-k2.7-code', 'kimi-k2-7-code', 'kimi-k2.7', 'kimi-k2-7'],
+        provider: 'openrouter',
+        openrouter_id: 'moonshotai/kimi-k2.7-code',
+        cost: {
+            input_per_million: 0.74,
+            output_per_million: 3.5,
+            cached_input_per_million: 0.15,
+        },
+        features: {
+            context_length: 262144,
+            input_modality: ['text', 'image'],
+            output_modality: ['text'],
+            tool_use: true,
+            streaming: true,
+            json_output: true,
+            max_output_tokens: 16384,
+            reasoning_output: true,
+        },
+        class: 'code',
+        description:
+            'MoonshotAI Kimi K2.7 Code via OpenRouter. Coding-focused long-context model for software engineering and agentic coding workflows.',
     },
 ];
 

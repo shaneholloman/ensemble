@@ -2886,6 +2886,7 @@ export class GeminiProvider extends BaseModelProvider {
         const liveModels = [
             'gemini-2.0-flash-live-001',
             'gemini-live-2.5-flash-preview',
+            'gemini-3.1-flash-live-preview',
             'gemini-2.5-flash-preview-native-audio-dialog',
             'gemini-2.5-flash-exp-native-audio-thinking-dialog',
             'gemini-2.0-flash-exp', // Experimental model that might support v1alpha

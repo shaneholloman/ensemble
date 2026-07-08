@@ -69,7 +69,7 @@ describe('Model Scoring and Disabling', () => {
             modelScores: {
                 'gpt-5.5': 80,
                 'gemini-3-flash-preview': 20,
-                'claude-sonnet-4-6': 50,
+                'claude-sonnet-5': 50,
             },
         };
 
@@ -80,7 +80,7 @@ describe('Model Scoring and Disabling', () => {
             expect(model).not.toBe('deepseek-chat');
             expect(model).not.toBe('grok-4');
             // Should only select from scored models that aren't disabled
-            expect(['gemini-3-flash-preview', 'gpt-5.5', 'claude-sonnet-4-6']).toContain(model);
+            expect(['gemini-3-flash-preview', 'gpt-5.5', 'claude-sonnet-5']).toContain(model);
         }
     });
 

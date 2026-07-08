@@ -84,7 +84,7 @@ describe('OpenAI chat provider thinking budget', () => {
         await drain(
             provider.createResponseStream(
                 [{ type: 'message', role: 'user', content: 'Return concise answer' }] as any,
-                'tencent/hy3-preview-none',
+                'tencent/hy3-none',
                 {
                     agent_id: 'test-openrouter-reasoning-disabled-suffix',
                 } as any
@@ -92,13 +92,13 @@ describe('OpenAI chat provider thinking budget', () => {
         );
 
         const disabledRequestParams = create.mock.calls.at(0)?.[0];
-        expect(disabledRequestParams?.model).toBe('tencent/hy3-preview');
+        expect(disabledRequestParams?.model).toBe('tencent/hy3');
         expect(disabledRequestParams?.reasoning).toEqual({ effort: 'none' });
 
         await drain(
             provider.createResponseStream(
                 [{ type: 'message', role: 'user', content: 'Return concise answer' }] as any,
-                'tencent/hy3-preview-high',
+                'tencent/hy3-high',
                 {
                     agent_id: 'test-openrouter-reasoning-high-suffix',
                 } as any
@@ -106,13 +106,13 @@ describe('OpenAI chat provider thinking budget', () => {
         );
 
         const highRequestParams = create.mock.calls.at(1)?.[0];
-        expect(highRequestParams?.model).toBe('tencent/hy3-preview');
+        expect(highRequestParams?.model).toBe('tencent/hy3');
         expect(highRequestParams?.reasoning).toEqual({ effort: 'high' });
 
         await drain(
             provider.createResponseStream(
                 [{ type: 'message', role: 'user', content: 'Return concise answer' }] as any,
-                'tencent/hy3-preview-disabled',
+                'tencent/hy3-disabled',
                 {
                     agent_id: 'test-openrouter-reasoning-disabled-word-suffix',
                 } as any
@@ -120,7 +120,7 @@ describe('OpenAI chat provider thinking budget', () => {
         );
 
         const disabledWordRequestParams = create.mock.calls.at(2)?.[0];
-        expect(disabledWordRequestParams?.model).toBe('tencent/hy3-preview');
+        expect(disabledWordRequestParams?.model).toBe('tencent/hy3');
         expect(disabledWordRequestParams?.reasoning).toEqual({ effort: 'none' });
     });
 });

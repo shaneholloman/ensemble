@@ -255,10 +255,8 @@ const ListenDemo: React.FC = () => {
             mediaStreamRef.current = stream;
 
             console.log('🎵 Creating audio context...');
-            audioContextRef.current = new (
-                window.AudioContext ||
-                (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-            )({
+            audioContextRef.current = new (window.AudioContext ||
+                (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)({
                 sampleRate: 16000,
             });
             console.log('✅ Audio context created:', audioContextRef.current);

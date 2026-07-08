@@ -50,8 +50,13 @@ const THINKING_BUDGET_CONFIGS: Record<string, number> = {
 type ClaudeAdaptiveEffort = 'low' | 'medium' | 'high' | 'xhigh';
 type ClaudeAdaptiveEffortOrOff = ClaudeAdaptiveEffort | 'off';
 
-const CLAUDE_ADAPTIVE_THINKING_MODEL_IDS = new Set(['claude-opus-4-7', 'claude-opus-4-8', 'claude-fable-5']);
-const CLAUDE_IMPLICIT_ADAPTIVE_THINKING_MODEL_IDS = new Set(['claude-fable-5']);
+const CLAUDE_ADAPTIVE_THINKING_MODEL_IDS = new Set([
+    'claude-opus-4-7',
+    'claude-opus-4-8',
+    'claude-sonnet-5',
+    'claude-fable-5',
+]);
+const CLAUDE_IMPLICIT_ADAPTIVE_THINKING_MODEL_IDS = new Set(['claude-sonnet-5', 'claude-fable-5']);
 const CLAUDE_ADAPTIVE_EFFORT_SUFFIXES: Record<string, ClaudeAdaptiveEffortOrOff> = {
     '-none': 'off',
     '-minimal': 'low',
