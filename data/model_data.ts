@@ -397,6 +397,54 @@ export const MODEL_REGISTRY: ModelEntry[] = [
             'Ideogram V3 image editing via FAL.ai. Inpaints one source image with a same-dimension mask. TURBO is $0.03/image, BALANCED is $0.06/image, and QUALITY is $0.09/image.',
     },
     {
+        id: 'ideogram/v4/instant',
+        aliases: ['fal-ideogram-v4-instant', 'ideogram-v4-instant'],
+        provider: 'fal',
+        cost: { per_image: 0.0075 },
+        features: { input_modality: ['text'], output_modality: ['image'] },
+        class: 'image_generation',
+        description:
+            'Ideogram V4 instant text-to-image via FAL.ai. Pricing is per megapixel: $0.00375 TURBO, $0.0075 BALANCED, or $0.0125 QUALITY.',
+    },
+    {
+        id: 'ideogram/v4/fast',
+        aliases: ['fal-ideogram-v4-fast', 'ideogram-v4-fast'],
+        provider: 'fal',
+        cost: { per_image: 0.0105 },
+        features: { input_modality: ['text'], output_modality: ['image'] },
+        class: 'image_generation',
+        description:
+            'Ideogram V4 fast text-to-image via FAL.ai. Pricing is per megapixel: $0.00525 TURBO, $0.0105 BALANCED, or $0.0175 QUALITY.',
+    },
+    {
+        id: 'bytedance/seedream/v5/pro/text-to-image',
+        aliases: [
+            'bytedance/seedream/v5/pro',
+            'fal-ai/bytedance/seedream/v5/pro',
+            'fal-ai/bytedance/seedream/v5/pro/text-to-image',
+        ],
+        provider: 'fal',
+        cost: { per_image: 0.135 },
+        features: { input_modality: ['text'], output_modality: ['image'] },
+        class: 'image_generation',
+        description:
+            'ByteDance Seedream 5.0 Pro text-to-image via FAL.ai. Tentative pricing is $0.0675/image up to 1536x1536 total area and $0.135/image above that up to 2048x2048.',
+    },
+    {
+        id: 'fal-ai/bytedance/seedream/v5/lite/text-to-image',
+        aliases: [
+            'bytedance/seedream/v5/lite',
+            'bytedance/seedream/v5/lite/text-to-image',
+            'fal-ai/bytedance/seedream/v5/lite',
+        ],
+        provider: 'fal',
+        cost: { per_image: 0.035 },
+        features: { input_modality: ['text'], output_modality: ['image'] },
+        class: 'image_generation',
+        description:
+            'ByteDance Seedream 5.0 Lite text-to-image via FAL.ai. Pricing is $0.035/image with up to 6 requested generations per call.',
+    },
+    {
         id: 'fal-ai/image-apps-v2/outpaint',
         aliases: ['fal-image-apps-v2-outpaint', 'fal-ai-image-apps-v2-outpaint'],
         provider: 'fal',

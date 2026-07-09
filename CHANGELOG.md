@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Added FAL support for Seedream 5.0 Pro/Lite text-to-image (`bytedance/seedream/v5/pro`, `bytedance/seedream/v5/lite`) and Ideogram V4 instant/fast (`ideogram/v4/instant`, `ideogram/v4/fast`) with endpoint-specific routing and current pricing metadata.
 - Added xAI Grok 4.5 (`grok-4.5`) metadata, current aliases (`grok-4.5-latest`, `grok-build-latest`), class defaults, cached-token pricing, and Chat Completions `reasoning_effort` mapping.
 - Added Gemini 3.5 Flash (`gemini-3.5-flash`) provider metadata, pricing, and native Gemini thinking-level suffix handling.
 - Added Gemini 3.1 Flash Lite Image (`gemini-3.1-flash-lite-image`) support and promoted current Gemini image model IDs (`gemini-3.1-flash-image`, `gemini-3-pro-image`, `gemini-2.5-flash-image`) while preserving preview IDs as aliases.

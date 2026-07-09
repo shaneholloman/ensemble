@@ -474,6 +474,8 @@ New providers added
 - Recraft v3 – via FAL.ai (supports text-to-vector and vector-style outputs).
 - Recraft Crisp Upscale – via FAL.ai (`fal-ai/recraft/upscale/crisp`, one source image per request).
 - Ideogram V3 – via FAL.ai (`fal-ai/ideogram/v3` for creation and `fal-ai/ideogram/v3/edit` for masked editing).
+- Ideogram V4 – via FAL.ai (`ideogram/v4/instant` and `ideogram/v4/fast` for text-to-image).
+- Seedream 5.0 Pro/Lite – via FAL.ai (`bytedance/seedream/v5/pro` and `bytedance/seedream/v5/lite`, aliasing to FAL's text-to-image endpoints).
 - Ideogram remove background – via FAL.ai (`fal-ai/ideogram/remove-background`, one source image per request).
 - Image outpaint – via FAL.ai (`fal-ai/image-apps-v2/outpaint`, one source image per request, directional expansion).
 - FLUX.2 Pro outpaint – via FAL.ai (`fal-ai/flux-2-pro/outpaint`, one source image per request, directional expansion up to 2048px).

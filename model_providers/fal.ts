@@ -19,6 +19,10 @@ type FalEndpoint = {
         | 'recraft-upscale-crisp'
         | 'ideogram-v3'
         | 'ideogram-v3-edit'
+        | 'ideogram-v4-instant'
+        | 'ideogram-v4-fast'
+        | 'seedream-v5-pro'
+        | 'seedream-v5-lite'
         | 'outpaint'
         | 'flux-2-pro-outpaint';
 };
@@ -59,10 +63,90 @@ function ideogramV3CostPerImage(renderingSpeed: 'TURBO' | 'BALANCED' | 'QUALITY'
     return 0.06;
 }
 
+function ideogramV4CostPerMegapixel(
+    bodyMode: 'ideogram-v4-instant' | 'ideogram-v4-fast',
+    renderingSpeed: 'TURBO' | 'BALANCED' | 'QUALITY'
+): number {
+    const multiplier = bodyMode === 'ideogram-v4-instant' ? 0.5 : 0.7;
+    if (renderingSpeed === 'TURBO') return 0.0075 * multiplier;
+    if (renderingSpeed === 'QUALITY') return 0.025 * multiplier;
+    return 0.015 * multiplier;
+}
+
 function clampFalIdeogramImageCount(n?: number): number {
     const count = Math.floor(Number(n || 1));
     if (!Number.isFinite(count)) return 1;
     return Math.max(1, Math.min(8, count));
+}
+
+function clampFalSeedreamImageCount(n?: number): number {
+    const count = Math.floor(Number(n || 1));
+    if (!Number.isFinite(count)) return 1;
+    return Math.max(1, Math.min(6, count));
+}
+
+function normalizeFalOutputFormat(format?: ImageGenerationOpts['output_format']): 'jpeg' | 'png' | undefined {
+    if (format === 'jpg') return 'jpeg';
+    if (format === 'jpeg' || format === 'png') return format;
+    return undefined;
+}
+
+function parsePixelSize(size: unknown): { width: number; height: number } | undefined {
+    if (typeof size === 'object' && size !== null) {
+        const width = (size as { width?: unknown }).width;
+        const height = (size as { height?: unknown }).height;
+        if (typeof width === 'number' && typeof height === 'number' && width > 0 && height > 0) {
+            return { width, height };
+        }
+    }
+
+    if (typeof size !== 'string') return undefined;
+    const match = /^(\d+)x(\d+)$/i.exec(size);
+    if (!match) return undefined;
+    return { width: Number(match[1]), height: Number(match[2]) };
+}
+
+function falImageSizeMegapixels(size: unknown): number | undefined {
+    const pixelSize = parsePixelSize(size);
+    if (pixelSize) return (pixelSize.width * pixelSize.height) / (1024 * 1024);
+
+    switch (size) {
+        case 'square':
+        case 'square_hd':
+        case 'auto_1K':
+            return 1;
+        case 'portrait_4_3':
+        case 'landscape_4_3':
+            return 1.125;
+        case 'portrait_16_9':
+        case 'landscape_16_9':
+            return 1.125;
+        case 'auto_2K':
+            return 4;
+        default:
+            return undefined;
+    }
+}
+
+function mapSeedreamV5ImageSize(
+    size?: ImageGenerationOpts['size'],
+    resolution?: ImageGenerationOpts['resolution']
+): string | { width: number; height: number } {
+    const pixelSize = parsePixelSize(size);
+    if (pixelSize) return pixelSize;
+    if (resolution === '1k') return 'auto_1K';
+    if (size === 'square') return 'square_hd';
+    if (size === 'landscape' || size === '1792x1024' || size === '1536x1024' || size === '16:9') {
+        return 'landscape_16_9';
+    }
+    if (size === 'portrait' || size === '1024x1792' || size === '1024x1536' || size === '9:16') {
+        return 'portrait_16_9';
+    }
+    return 'auto_2K';
+}
+
+function seedreamV5ProCostForMegapixels(megapixels: number): number {
+    return megapixels <= (1536 * 1536) / (1024 * 1024) ? 0.0675 : 0.135;
 }
 
 export class FALProvider extends BaseModelProvider {
@@ -90,6 +174,28 @@ export class FALProvider extends BaseModelProvider {
             m === 'fal-ai-ideogram-v3-edit'
         ) {
             return { path: 'fal-ai/ideogram/v3/edit', bodyMode: 'ideogram-v3-edit' };
+        }
+        if (m === 'ideogram/v4/instant' || m === 'fal-ideogram-v4-instant') {
+            return { path: 'ideogram/v4/instant', bodyMode: 'ideogram-v4-instant' };
+        }
+        if (m === 'ideogram/v4/fast' || m === 'fal-ideogram-v4-fast') {
+            return { path: 'ideogram/v4/fast', bodyMode: 'ideogram-v4-fast' };
+        }
+        if (
+            m === 'bytedance/seedream/v5/pro' ||
+            m === 'bytedance/seedream/v5/pro/text-to-image' ||
+            m === 'fal-ai/bytedance/seedream/v5/pro' ||
+            m === 'fal-ai/bytedance/seedream/v5/pro/text-to-image'
+        ) {
+            return { path: 'bytedance/seedream/v5/pro/text-to-image', bodyMode: 'seedream-v5-pro' };
+        }
+        if (
+            m === 'bytedance/seedream/v5/lite' ||
+            m === 'bytedance/seedream/v5/lite/text-to-image' ||
+            m === 'fal-ai/bytedance/seedream/v5/lite' ||
+            m === 'fal-ai/bytedance/seedream/v5/lite/text-to-image'
+        ) {
+            return { path: 'fal-ai/bytedance/seedream/v5/lite/text-to-image', bodyMode: 'seedream-v5-lite' };
         }
         if (m === 'fal-ai/image2svg' || m === 'image2svg' || m === 'fal-image2svg') {
             return { path: 'fal-ai/image2svg', bodyMode: 'image2svg' };
@@ -264,7 +370,7 @@ export class FALProvider extends BaseModelProvider {
             rendering_speed: renderingSpeed,
             num_images: clampFalIdeogramImageCount(opts.n),
         };
-        const size = mapImageSize(opts.size);
+        const size = parsePixelSize(opts.size) || mapImageSize(opts.size);
         if (size) body.image_size = size;
         if (opts?.response_format === 'b64_json') {
             body.sync_mode = true;
@@ -293,6 +399,59 @@ export class FALProvider extends BaseModelProvider {
         }
         if (typeof opts.seed === 'number' && Number.isFinite(opts.seed)) {
             body.seed = Math.floor(opts.seed);
+        }
+        return body;
+    }
+
+    private buildIdeogramV4Body(
+        prompt: string,
+        bodyMode: 'ideogram-v4-instant' | 'ideogram-v4-fast',
+        opts: ImageGenerationOpts
+    ): Record<string, unknown> {
+        const body: Record<string, unknown> = {
+            prompt,
+            num_images: clampFalIdeogramImageCount(opts.n),
+        };
+        const size = parsePixelSize(opts.size) || mapImageSize(opts.size);
+        if (size) body.image_size = size;
+        if (bodyMode === 'ideogram-v4-fast') {
+            body.rendering_speed = mapIdeogramV3RenderingSpeed(opts.quality);
+        }
+        if (opts?.response_format === 'b64_json') {
+            body.sync_mode = true;
+        }
+        if (opts.enable_safety_checker !== undefined) {
+            body.enable_safety_checker = opts.enable_safety_checker;
+        }
+        const outputFormat = normalizeFalOutputFormat(opts.output_format);
+        if (outputFormat) {
+            body.output_format = outputFormat;
+        }
+        if (typeof opts.seed === 'number' && Number.isFinite(opts.seed)) {
+            body.seed = Math.floor(opts.seed);
+        }
+        return body;
+    }
+
+    private buildSeedreamV5Body(
+        prompt: string,
+        bodyMode: 'seedream-v5-pro' | 'seedream-v5-lite',
+        opts: ImageGenerationOpts
+    ): Record<string, unknown> {
+        const body: Record<string, unknown> = {
+            prompt,
+            image_size: mapSeedreamV5ImageSize(opts.size, opts.resolution),
+            num_images: clampFalSeedreamImageCount(opts.n),
+        };
+        const outputFormat = normalizeFalOutputFormat(opts.output_format);
+        if (bodyMode === 'seedream-v5-pro' && outputFormat) {
+            body.output_format = outputFormat;
+        }
+        if (opts?.response_format === 'b64_json') {
+            body.sync_mode = true;
+        }
+        if (opts.enable_safety_checker !== undefined) {
+            body.enable_safety_checker = opts.enable_safety_checker;
         }
         return body;
     }
@@ -368,6 +527,12 @@ export class FALProvider extends BaseModelProvider {
         if (bodyMode === 'ideogram-v3-edit') {
             return this.buildIdeogramV3EditBody(prompt, opts);
         }
+        if (bodyMode === 'ideogram-v4-instant' || bodyMode === 'ideogram-v4-fast') {
+            return this.buildIdeogramV4Body(prompt, bodyMode, opts);
+        }
+        if (bodyMode === 'seedream-v5-pro' || bodyMode === 'seedream-v5-lite') {
+            return this.buildSeedreamV5Body(prompt, bodyMode, opts);
+        }
         if (bodyMode === 'outpaint') {
             return this.buildOutpaintBody(prompt, opts);
         }
@@ -432,6 +597,26 @@ export class FALProvider extends BaseModelProvider {
         return totalMegapixels;
     }
 
+    private getImageMegapixels(data: any, requestImageSize: unknown, fallbackImageCount: number): number[] {
+        const candidates = data?.images || data?.output?.images || [];
+        const requestMegapixels = falImageSizeMegapixels(requestImageSize);
+
+        if (!Array.isArray(candidates) || candidates.length === 0) {
+            return Array.from({ length: fallbackImageCount }, () => requestMegapixels || 1);
+        }
+
+        return candidates.map((item: any) => {
+            if (item && typeof item === 'object') {
+                const width = typeof item.width === 'number' ? item.width : undefined;
+                const height = typeof item.height === 'number' ? item.height : undefined;
+                if (width && height && width > 0 && height > 0 && Number.isFinite(width) && Number.isFinite(height)) {
+                    return (width * height) / (1024 * 1024);
+                }
+            }
+            return requestMegapixels || 1;
+        });
+    }
+
     async createImage(
         prompt: string,
         model: string,
@@ -462,8 +647,42 @@ export class FALProvider extends BaseModelProvider {
                     bodyMode === 'flux-2-pro-outpaint'
                         ? calculateFalFlux2ProOutpaintCostFromImages(data?.images || data?.output?.images)
                         : null;
+                const bodyRecord = bodyInput as Record<string, unknown>;
+                const ideogramV4Mode =
+                    bodyMode === 'ideogram-v4-instant' || bodyMode === 'ideogram-v4-fast' ? bodyMode : null;
+                const ideogramV4Megapixels = ideogramV4Mode
+                    ? this.getImageMegapixels(data, bodyRecord.image_size, images.length)
+                    : null;
+                const seedreamV5ProMegapixels =
+                    bodyMode === 'seedream-v5-pro'
+                        ? this.getImageMegapixels(data, bodyRecord.image_size, images.length)
+                        : null;
+                const seedreamV5LiteCost = bodyMode === 'seedream-v5-lite' ? images.length * 0.035 : null;
+                const ideogramV4RenderingSpeed =
+                    ideogramV4Mode && bodyRecord.rendering_speed
+                        ? (bodyRecord.rendering_speed as 'TURBO' | 'BALANCED' | 'QUALITY')
+                        : 'BALANCED';
+                const ideogramV4Cost =
+                    ideogramV4Mode && ideogramV4Megapixels
+                        ? ideogramV4Megapixels.reduce(
+                              (total, megapixels) =>
+                                  total +
+                                  megapixels * ideogramV4CostPerMegapixel(ideogramV4Mode, ideogramV4RenderingSpeed),
+                              0
+                          )
+                        : null;
+                const seedreamV5ProCost = seedreamV5ProMegapixels
+                    ? seedreamV5ProMegapixels.reduce(
+                          (total, megapixels) => total + seedreamV5ProCostForMegapixels(megapixels),
+                          0
+                      )
+                    : null;
                 const imageCount =
-                    bodyMode === 'outpaint' ? this.getOutpaintCostImageCount(data, images.length) : images.length;
+                    bodyMode === 'outpaint'
+                        ? this.getOutpaintCostImageCount(data, images.length)
+                        : ideogramV4Megapixels
+                          ? ideogramV4Megapixels.reduce((total, megapixels) => total + megapixels, 0)
+                          : images.length;
                 const renderingSpeed =
                     bodyMode === 'ideogram-v3' || bodyMode === 'ideogram-v3-edit'
                         ? mapIdeogramV3RenderingSpeed(opts.quality)
@@ -472,6 +691,9 @@ export class FALProvider extends BaseModelProvider {
                     model,
                     image_count: imageCount,
                     ...(fluxOutpaintCost ? { cost: fluxOutpaintCost.cost } : {}),
+                    ...(ideogramV4Cost !== null ? { cost: ideogramV4Cost } : {}),
+                    ...(seedreamV5ProCost !== null ? { cost: seedreamV5ProCost } : {}),
+                    ...(seedreamV5LiteCost !== null ? { cost: seedreamV5LiteCost } : {}),
                     request_id: opts?.request_id,
                     metadata: {
                         source: 'fal',
@@ -479,6 +701,30 @@ export class FALProvider extends BaseModelProvider {
                             ? {
                                   billable_megapixels: fluxOutpaintCost.billableMegapixels,
                                   priced_images: fluxOutpaintCost.pricedImages,
+                              }
+                            : {}),
+                        ...(ideogramV4Mode && ideogramV4Megapixels
+                            ? {
+                                  billable_megapixels: ideogramV4Megapixels,
+                                  rendering_speed: ideogramV4RenderingSpeed,
+                                  cost_per_megapixel: ideogramV4CostPerMegapixel(
+                                      ideogramV4Mode,
+                                      ideogramV4RenderingSpeed
+                                  ),
+                              }
+                            : {}),
+                        ...(seedreamV5ProMegapixels
+                            ? {
+                                  billable_megapixels: seedreamV5ProMegapixels,
+                                  cost_per_image:
+                                      seedreamV5ProMegapixels.length > 0
+                                          ? seedreamV5ProCostForMegapixels(seedreamV5ProMegapixels[0])
+                                          : undefined,
+                              }
+                            : {}),
+                        ...(seedreamV5LiteCost !== null
+                            ? {
+                                  cost_per_image: 0.035,
                               }
                             : {}),
                         ...(renderingSpeed
