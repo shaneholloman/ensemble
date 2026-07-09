@@ -224,7 +224,7 @@ export const MODEL_CLASSES = {
     embedding: {
         models: [
             'text-embedding-3-large', // OpenAI (3072d)
-            'text-embedding-004', // Google (latest stable)
+            'gemini-embedding-2', // Google (3072d)
         ],
         description: 'Vector embedding models for semantic search and RAG',
     },
@@ -508,41 +508,38 @@ export const MODEL_REGISTRY: ModelEntry[] = [
         description: "OpenAI's large embedding model, good balance of performance and cost",
     },
     {
-        id: 'gemini-embedding-exp-03-07',
-        provider: 'google',
+        id: 'text-embedding-ada-002',
+        provider: 'openai',
         cost: {
-            input_per_million: 0, // Free during experimental period
+            input_per_million: 0.1,
             output_per_million: 0,
         },
         features: {
             input_modality: ['text'],
             output_modality: ['embedding'],
-            input_token_limit: 8191,
+            input_token_limit: 8192,
         },
         embedding: true,
-        dim: 768,
+        dim: 1536,
         class: 'embedding',
-        description: "Google's experimental embedding model optimized for semantic similarity",
+        description: "OpenAI's older, still-supported text embedding model",
     },
-
-    // Google Embeddings (stable)
     {
-        id: 'text-embedding-004',
+        id: 'gemini-embedding-2',
         provider: 'google',
         cost: {
-            // Pricing varies by region/product tier; leave unset/zeroed unless we have a confirmed source.
-            input_per_million: 0,
+            input_per_million: 0.2,
             output_per_million: 0,
         },
         features: {
             input_modality: ['text'],
             output_modality: ['embedding'],
-            input_token_limit: 8191,
+            input_token_limit: 8192,
         },
         embedding: true,
-        dim: 768,
+        dim: 3072,
         class: 'embedding',
-        description: "Google's stable text embedding model (text-embedding-004)",
+        description: "Google's current embedding model; this text API supports its text-embedding capability",
     },
     // Models used via OpenRouter
     // Note: Specific pricing/features via OpenRouter can fluctuate. Validation based on general model info & provider docs.
@@ -1148,6 +1145,114 @@ export const MODEL_REGISTRY: ModelEntry[] = [
         },
         class: 'standard', // High-end standard model
         description: 'Latest premium GPT model from OpenAI',
+    },
+
+    // GPT-5.6 models
+    {
+        id: 'gpt-5.6-sol',
+        aliases: ['gpt-5.6'],
+        provider: 'openai',
+        cost: {
+            input_per_million: {
+                threshold_tokens: 272000,
+                price_below_threshold_per_million: 5.0,
+                price_above_threshold_per_million: 10.0,
+                tier_basis: 'input_tokens',
+            },
+            cached_input_per_million: {
+                threshold_tokens: 272000,
+                price_below_threshold_per_million: 0.5,
+                price_above_threshold_per_million: 1.0,
+                tier_basis: 'input_tokens',
+            },
+            output_per_million: {
+                threshold_tokens: 272000,
+                price_below_threshold_per_million: 30.0,
+                price_above_threshold_per_million: 45.0,
+                tier_basis: 'input_tokens',
+            },
+        },
+        features: {
+            context_length: 1050000,
+            max_output_tokens: 128000,
+            input_modality: ['text', 'image'],
+            output_modality: ['text'],
+            tool_use: true,
+            streaming: true,
+            json_output: true,
+        },
+        class: 'reasoning',
+        description: 'GPT-5.6 flagship model for complex reasoning, coding, and professional work (1.05M/128k).',
+    },
+    {
+        id: 'gpt-5.6-terra',
+        provider: 'openai',
+        cost: {
+            input_per_million: {
+                threshold_tokens: 272000,
+                price_below_threshold_per_million: 2.5,
+                price_above_threshold_per_million: 5.0,
+                tier_basis: 'input_tokens',
+            },
+            cached_input_per_million: {
+                threshold_tokens: 272000,
+                price_below_threshold_per_million: 0.25,
+                price_above_threshold_per_million: 0.5,
+                tier_basis: 'input_tokens',
+            },
+            output_per_million: {
+                threshold_tokens: 272000,
+                price_below_threshold_per_million: 15.0,
+                price_above_threshold_per_million: 22.5,
+                tier_basis: 'input_tokens',
+            },
+        },
+        features: {
+            context_length: 1050000,
+            max_output_tokens: 128000,
+            input_modality: ['text', 'image'],
+            output_modality: ['text'],
+            tool_use: true,
+            streaming: true,
+            json_output: true,
+        },
+        class: 'standard',
+        description: 'GPT-5.6 model balancing intelligence and cost for production work (1.05M/128k).',
+    },
+    {
+        id: 'gpt-5.6-luna',
+        provider: 'openai',
+        cost: {
+            input_per_million: {
+                threshold_tokens: 272000,
+                price_below_threshold_per_million: 1.0,
+                price_above_threshold_per_million: 2.0,
+                tier_basis: 'input_tokens',
+            },
+            cached_input_per_million: {
+                threshold_tokens: 272000,
+                price_below_threshold_per_million: 0.1,
+                price_above_threshold_per_million: 0.2,
+                tier_basis: 'input_tokens',
+            },
+            output_per_million: {
+                threshold_tokens: 272000,
+                price_below_threshold_per_million: 6.0,
+                price_above_threshold_per_million: 9.0,
+                tier_basis: 'input_tokens',
+            },
+        },
+        features: {
+            context_length: 1050000,
+            max_output_tokens: 128000,
+            input_modality: ['text', 'image'],
+            output_modality: ['text'],
+            tool_use: true,
+            streaming: true,
+            json_output: true,
+        },
+        class: 'mini',
+        description: 'GPT-5.6 model optimized for efficient, high-volume workloads (1.05M/128k).',
     },
 
     // GPT-5.5 models

@@ -125,6 +125,7 @@ export interface ModelSettings {
 
     // OpenAI-specific settings (will be ignored by other providers)
     verbosity?: 'low' | 'medium' | 'high'; // Controls response verbosity (OpenAI only)
+    reasoning_mode?: 'pro'; // GPT-5.6 Responses API execution mode
     service_tier?: 'auto' | 'default' | 'flex' | 'priority'; // Processing tier for the request (OpenAI only)
 }
 

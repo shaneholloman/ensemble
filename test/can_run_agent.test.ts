@@ -105,16 +105,26 @@ describe('canRunAgent', () => {
             });
         });
 
-        it('routes Google text embeddings to the Google provider', async () => {
+        it('routes Gemini embeddings to the Google provider', async () => {
             process.env.GOOGLE_API_KEY = 'test-google-key';
 
-            const result = await canRunAgent({ model: 'text-embedding-004' });
+            const result = await canRunAgent({ model: 'gemini-embedding-2' });
 
             expect(result).toMatchObject({
                 canRun: true,
-                model: 'text-embedding-004',
+                model: 'gemini-embedding-2',
                 provider: 'google',
                 missingProvider: undefined,
+            });
+        });
+
+        it('rejects retired Google embedding models with a migration message', async () => {
+            const result = await canRunAgent({ model: 'text-embedding-004' });
+
+            expect(result).toMatchObject({
+                canRun: false,
+                model: 'text-embedding-004',
+                reason: expect.stringContaining('Migrate to gemini-embedding-2'),
             });
         });
 

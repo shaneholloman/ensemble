@@ -82,7 +82,7 @@ const EmbedDemo: React.FC = () => {
         },
         {
             label: 'Gemini Models',
-            options: [{ value: 'gemini-embedding-exp-03-07', label: 'Gemini Experimental (768d)' }],
+            options: [{ value: 'gemini-embedding-2', label: 'Gemini Embedding 2 (3072d)' }],
         },
     ];
 

@@ -63,11 +63,19 @@ const PROVIDER_BY_ID: Record<ModelProviderID, ModelProvider> = {
     test: testProvider,
 };
 
+const DEPRECATED_MODEL_MIGRATIONS: Record<string, string> = {
+    'text-embedding-004':
+        'Model text-embedding-004 was shut down by Google. Migrate to gemini-embedding-2 and regenerate stored embeddings before comparing them with new vectors.',
+    'gemini-embedding-exp-03-07':
+        'Model gemini-embedding-exp-03-07 was shut down by Google. Migrate to gemini-embedding-2 and regenerate stored embeddings before comparing them with new vectors.',
+};
+
+function getDeprecatedModelMigration(model?: string): string | undefined {
+    return model ? DEPRECATED_MODEL_MIGRATIONS[model] : undefined;
+}
+
 // Provider mapping by model prefix
 const MODEL_PROVIDER_MAP: Record<string, ModelProvider> = {
-    // Explicit model IDs that would otherwise be captured by broader prefixes
-    'text-embedding-004': geminiProvider, // Google Text Embeddings use an OpenAI-like prefix
-
     // OpenRouter models (must come before OpenAI to take precedence)
     'gpt-oss-': openRouterProvider, // Open source GPT models via OpenRouter
 
@@ -205,6 +213,10 @@ export function isProviderKeyValid(provider: ModelProviderID): boolean {
  * Get the provider name from a model name
  */
 export function getProviderFromModel(model: string): ModelProviderID {
+    if (getDeprecatedModelMigration(model)) {
+        return 'google';
+    }
+
     // First check if it's an external model
     if (isExternalModel(model)) {
         const externalModel = getExternalModel(model);
@@ -559,6 +571,11 @@ export async function getModelFromClass(
 export function getModelProvider(model?: string): ModelProvider {
     // If no class override, use the model name to determine the provider
     if (model) {
+        const deprecatedModelMigration = getDeprecatedModelMigration(model);
+        if (deprecatedModelMigration) {
+            throw new Error(deprecatedModelMigration);
+        }
+
         // First check if it's an external model
         if (isExternalModel(model)) {
             const externalModel = getExternalModel(model);
@@ -643,6 +660,15 @@ export async function canRunAgent(agent: Partial<AgentDefinition>): Promise<{
 }> {
     // If a specific model is provided
     if (agent.model) {
+        const deprecatedModelMigration = getDeprecatedModelMigration(agent.model);
+        if (deprecatedModelMigration) {
+            return {
+                canRun: false,
+                model: agent.model,
+                reason: deprecatedModelMigration,
+            };
+        }
+
         const provider = getProviderFromModel(agent.model);
         const hasKey = isProviderKeyValid(provider);
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { getModelProvider } from '../model_providers/model_provider.js';
+import { getModelProvider, getProviderFromModel } from '../model_providers/model_provider.js';
 import { openaiProvider } from '../model_providers/openai.js';
 import { claudeProvider } from '../model_providers/claude.js';
 import { geminiProvider } from '../model_providers/gemini.js';
@@ -56,6 +56,11 @@ describe('getModelProvider', () => {
 
     it('returns Gemini provider', () => {
         expect(getModelProvider('gemini-pro')).toBe(geminiProvider);
+    });
+
+    it('does not route retired Google embedding models to OpenAI', () => {
+        expect(getProviderFromModel('text-embedding-004')).toBe('google');
+        expect(() => getModelProvider('text-embedding-004')).toThrow('Migrate to gemini-embedding-2');
     });
 
     it('returns Grok provider', () => {

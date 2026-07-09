@@ -1040,7 +1040,7 @@ export class OpenAIProvider extends BaseModelProvider {
                 input,
             };
 
-            type OpenAIReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+            type OpenAIReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
             const parseThinkingBudget = (value: unknown): number | null => {
                 if (typeof value !== 'number' || !Number.isFinite(value)) {
                     return null;
@@ -1084,12 +1084,15 @@ export class OpenAIProvider extends BaseModelProvider {
                 'medium',
                 'high',
                 'xhigh',
+                'max',
             ];
             let requestedReasoningEffort: OpenAIReasoningEffort | undefined;
 
             for (const effort of REASONING_EFFORT_CONFIGS) {
                 const suffix = `-${effort}`;
-                if (model.endsWith(suffix)) {
+                // `gpt-5.1-codex-max` is a real model ID. `max` is an effort suffix only for GPT-5.6.
+                const isSupportedEffortSuffix = effort !== 'max' || model.startsWith('gpt-5.6');
+                if (isSupportedEffortSuffix && model.endsWith(suffix)) {
                     requestedReasoningEffort = effort;
                     model = model.slice(0, -suffix.length);
                     requestParams.model = model;
@@ -1106,6 +1109,10 @@ export class OpenAIProvider extends BaseModelProvider {
                 requestedReasoningEffort = thinkingBudgetEffort;
             }
 
+            if (settings?.reasoning_mode === 'pro' && !model.startsWith('gpt-5.6')) {
+                throw new Error('reasoning_mode: "pro" is only supported by GPT-5.6 models.');
+            }
+
             // Apply reasoning defaults.
             // - GPT-5.1/5.2/5.4 default to effort=none (do not send reasoning by default so temperature/top_p can work)
             // - GPT-5.5 defaults to effort=medium
@@ -1118,11 +1125,15 @@ export class OpenAIProvider extends BaseModelProvider {
             if (requestedReasoningEffort) {
                 // Only include reasoning summaries when actually producing reasoning.
                 if (requestedReasoningEffort === 'none') {
-                    requestParams.reasoning = { effort: 'none' as any };
+                    requestParams.reasoning = {
+                        effort: 'none' as any,
+                        ...(settings?.reasoning_mode && { mode: settings.reasoning_mode }),
+                    };
                 } else {
                     requestParams.reasoning = {
                         effort: requestedReasoningEffort as any,
                         summary: 'auto',
+                        ...(settings?.reasoning_mode && { mode: settings.reasoning_mode }),
                     };
                 }
             } else if (requiresReasoning(model)) {
@@ -1130,6 +1141,7 @@ export class OpenAIProvider extends BaseModelProvider {
                     requestParams.reasoning = {
                         effort: defaultEffort as any,
                         summary: 'auto',
+                        ...(settings?.reasoning_mode && { mode: settings.reasoning_mode }),
                     };
                 }
             }

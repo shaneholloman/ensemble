@@ -36,19 +36,21 @@ describe('ensembleEmbed', () => {
 
         // Setup findModel mock to return appropriate model info
         vi.mocked(findModel).mockImplementation((modelId: string) => {
-            if (modelId === 'text-embedding-3-small' || modelId === 'text-embedding-3-large') {
+            if (modelId === 'text-embedding-3-small') {
                 return {
                     id: modelId,
                     provider: 'openai',
-                    features: { input_token_limit: 8191 },
+                    features: { input_token_limit: 8192 },
+                    dim: 1536,
                     cost: {},
                 } as any;
             }
-            if (modelId === 'gemini-embedding-exp-03-07') {
+            if (modelId === 'text-embedding-3-large' || modelId === 'gemini-embedding-2') {
                 return {
                     id: modelId,
-                    provider: 'google',
-                    features: { input_token_limit: 8191 },
+                    provider: modelId.startsWith('gemini-') ? 'google' : 'openai',
+                    features: { input_token_limit: 8192 },
+                    dim: 3072,
                     cost: {},
                 } as any;
             }
@@ -157,9 +159,7 @@ describe('ensembleEmbed', () => {
                 expect.any(Array),
                 'text-embedding-3-small',
                 agent,
-                {
-                    dimensions: 1536,
-                }
+                undefined
             );
 
             // Check that it created 2 chunks
@@ -171,24 +171,22 @@ describe('ensembleEmbed', () => {
             expect(result[0]).toBeCloseTo(0.15); // (0.1 + 0.2) / 2
         });
 
-        it('should chunk long texts for Gemini embeddings', async () => {
+        it('should use a registered model default dimension when chunking', async () => {
             // Create a long text that exceeds the token limit
-            const longText = 'a'.repeat(30000); // ~7500 tokens
-            const mockEmbedding1 = new Array(768).fill(0.3);
-            const mockEmbedding2 = new Array(768).fill(0.7);
+            const longText = 'a'.repeat(35000); // ~8750 tokens
+            const mockEmbedding1 = new Array(3072).fill(0.3);
+            const mockEmbedding2 = new Array(3072).fill(0.7);
             mockProvider.createEmbedding.mockResolvedValue([mockEmbedding1, mockEmbedding2]);
 
-            const agent: AgentDefinition = { agent_id: 'test', model: 'gemini-embedding-exp-03-07' };
-            const result = await ensembleEmbed(longText, agent, { dimensions: 768 });
+            const agent: AgentDefinition = { agent_id: 'test', model: 'gemini-embedding-2' };
+            const result = await ensembleEmbed(longText, agent);
 
             // Should have called createEmbedding with an array of chunks
             expect(mockProvider.createEmbedding).toHaveBeenCalledWith(
                 expect.any(Array),
-                'gemini-embedding-exp-03-07',
+                'gemini-embedding-2',
                 agent,
-                {
-                    dimensions: 768,
-                }
+                undefined
             );
 
             // Check that it created 2 chunks
@@ -196,7 +194,7 @@ describe('ensembleEmbed', () => {
             expect(callArgs[0]).toHaveLength(2);
 
             // Result should be averaged
-            expect(result).toHaveLength(768);
+            expect(result).toHaveLength(3072);
             expect(result[0]).toBeCloseTo(0.5); // (0.3 + 0.7) / 2
         });
 
@@ -209,9 +207,12 @@ describe('ensembleEmbed', () => {
             const result = await ensembleEmbed(shortText, agent);
 
             // Should have called createEmbedding with the text directly
-            expect(mockProvider.createEmbedding).toHaveBeenCalledWith(shortText, 'text-embedding-3-small', agent, {
-                dimensions: 1536,
-            });
+            expect(mockProvider.createEmbedding).toHaveBeenCalledWith(
+                shortText,
+                'text-embedding-3-small',
+                agent,
+                undefined
+            );
 
             expect(result).toHaveLength(1536);
         });
@@ -241,9 +242,7 @@ describe('ensembleEmbed', () => {
             const agent: AgentDefinition = { agent_id: 'test', model: 'test-model' };
             const result = await ensembleEmbed('test text', agent);
 
-            expect(mockProvider.createEmbedding).toHaveBeenCalledWith('test text', 'test-model', agent, {
-                dimensions: 1536,
-            });
+            expect(mockProvider.createEmbedding).toHaveBeenCalledWith('test text', 'test-model', agent, undefined);
             expect(result).toEqual(mockEmbedding);
         });
 

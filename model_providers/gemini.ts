@@ -892,7 +892,7 @@ export class GeminiProvider extends BaseModelProvider {
     /**
      * Creates embeddings for text input using Gemini embedding models
      * @param input Text to embed (string or array of strings)
-     * @param model ID of the embedding model to use (e.g., 'gemini/gemini-embedding-exp-03-07')
+     * @param model ID of the embedding model to use (e.g., 'gemini-embedding-2')
      * @param opts Optional parameters for embedding generation
      * @returns Promise resolving to embedding vector(s)
      */
@@ -907,6 +907,13 @@ export class GeminiProvider extends BaseModelProvider {
         try {
             // Handle 'gemini/' prefix if present
             let actualModelId = model.startsWith('gemini/') ? model.substring(7) : model;
+            const isGeminiEmbedding2 = actualModelId === 'gemini-embedding-2';
+
+            if (isGeminiEmbedding2 && opts?.taskType) {
+                throw new Error(
+                    'gemini-embedding-2 does not support taskType. Include the task instruction directly in the text input.'
+                );
+            }
 
             // Check for suffix and remove it from actual model ID while setting thinking config
             let thinkingConfig: { thinkingBudget: number } | null = null;
@@ -927,9 +934,11 @@ export class GeminiProvider extends BaseModelProvider {
             // Prepare the embedding request payload
             const payload = {
                 model: actualModelId,
-                contents: input,
+                // Embedding 2 aggregates multiple strings unless each string is wrapped as a Content object.
+                contents:
+                    isGeminiEmbedding2 && Array.isArray(input) ? input.map(text => ({ parts: [{ text }] })) : input,
                 config: {
-                    taskType: opts?.taskType ?? 'SEMANTIC_SIMILARITY',
+                    ...(!isGeminiEmbedding2 && { taskType: opts?.taskType ?? 'SEMANTIC_SIMILARITY' }),
                     // Add outputDimensionality if specified in options
                     ...(opts?.dimensions && { outputDimensionality: opts.dimensions }),
                 } as any, // Cast to any to allow additional properties

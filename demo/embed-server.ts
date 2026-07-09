@@ -100,7 +100,7 @@ wss.on('connection', ws => {
                 { id: 'text-embedding-3-small', name: 'OpenAI Small (1536d)', provider: 'openai' },
                 { id: 'text-embedding-3-large', name: 'OpenAI Large (3072d)', provider: 'openai' },
                 { id: 'text-embedding-ada-002', name: 'OpenAI Ada v2 (1536d)', provider: 'openai' },
-                { id: 'gemini-embedding-exp-03-07', name: 'Gemini Experimental (768d)', provider: 'google' },
+                { id: 'gemini-embedding-2', name: 'Gemini Embedding 2 (3072d)', provider: 'google' },
             ],
         })
     );
