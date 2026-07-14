@@ -21,7 +21,7 @@ import {
     EmbedOpts,
 } from '../types/types.js';
 import { BaseModelProvider } from './base_provider.js';
-import OpenAI, { toFile } from 'openai';
+import OpenAI from 'openai';
 // import {v4 as uuidv4} from 'uuid';
 import { costTracker } from '../utils/cost_tracker.js';
 import { log_llm_request, log_llm_response, log_llm_error } from '../utils/llm_logger.js';
@@ -45,6 +45,7 @@ import {
     OpenAIImageRequestError,
     runOpenAIImageRequest,
 } from './openai_image_request.js';
+import { prepareOpenAIImageEditInput } from './openai_image_edit_input.js';
 import { findModel } from '../data/model_data.js';
 import { buildEventsFromOpenAIResponse } from './openai_response_events.js';
 import type { ResponseCreateParamsStreaming } from 'openai/resources/responses/responses.js';
@@ -408,130 +409,34 @@ export class OpenAIProvider extends BaseModelProvider {
             if (source_images) {
                 console.log('[OpenAI] Using images.edit with source_images');
 
-                // Convert single string to array for consistent processing
-                const imageArray = Array.isArray(source_images) ? source_images : [source_images];
-                const imageFiles = [];
-
-                // Process each image in the array
-                for (let i = 0; i < imageArray.length; i++) {
-                    const sourceImg = imageArray[i];
-                    let imageFile;
-                    let imageData: string;
-                    let metadata: { category?: string; title?: string; id?: string | number } | undefined;
-
-                    // Check if this is an object with metadata
-                    if (typeof sourceImg === 'object' && 'data' in sourceImg) {
-                        imageData = sourceImg.data;
-                        metadata = sourceImg.metadata;
-                    } else {
-                        imageData = sourceImg;
-                    }
-
-                    // Generate filename based on metadata or index
-                    let filename = `image_${i}.png`;
-                    if (metadata) {
-                        const parts = [];
-                        if (metadata.category) parts.push(metadata.category);
-                        if (metadata.title) parts.push(metadata.title.replace(/[^a-zA-Z0-9-_]/g, '_'));
-                        if (metadata.id) parts.push(`id${metadata.id}`);
-                        if (parts.length > 0) {
-                            filename = `${parts.join('_')}.png`;
-                        }
-                    }
-
-                    // Check if image data is a URL or base64 string
-                    if (imageData.startsWith('http://') || imageData.startsWith('https://')) {
-                        // Handle URL case - fetch the image
-                        const imageResponse = await fetch(imageData);
-                        const imageBuffer = await imageResponse.arrayBuffer();
-                        const ct = imageResponse.headers.get('content-type') || 'image/png';
-
-                        // Convert to OpenAI file format with descriptive filename
-                        imageFile = await toFile(new Uint8Array(imageBuffer), filename, {
-                            type: ct,
-                        });
-                    } else {
-                        // Handle base64 string case
-                        // Check if it's a data URL and extract the base64 part if needed
-                        let base64Data = imageData;
-                        let mime = 'image/png';
-                        if (imageData.startsWith('data:')) {
-                            const m = /^data:([^;]+);base64,(.+)$/i.exec(imageData);
-                            if (m) {
-                                mime = m[1] || 'image/png';
-                                base64Data = m[2];
-                            } else {
-                                base64Data = imageData.split(',')[1];
-                            }
-                        }
-
-                        // Convert base64 to binary
-                        const binaryData = Buffer.from(base64Data, 'base64');
-
-                        // Convert to OpenAI file format with descriptive filename
-                        imageFile = await toFile(new Uint8Array(binaryData), filename, {
-                            type: mime,
-                        });
-                    }
-
-                    imageFiles.push(imageFile);
-                }
-
-                // Handle mask if provided (for inpainting)
-                let maskFile;
-                if (opts?.mask) {
-                    let maskBase64 = opts.mask;
-                    if (opts.mask.startsWith('data:')) {
-                        maskBase64 = opts.mask.split(',')[1];
-                    }
-                    const maskBinary = Buffer.from(maskBase64, 'base64');
-                    maskFile = await toFile(new Uint8Array(maskBinary), 'mask.png', {
-                        type: 'image/png',
-                    });
-                }
-
-                // OpenAI Images Edit supports multiple images. Ensure each file has a valid
-                // content-type; otherwise the API may reject specific entries.
-                const editParams: any = {
-                    model,
-                    prompt,
-                    image: imageFiles,
-                    n: number_of_images,
-                    background,
-                    quality,
-                    size,
-                    moderation: 'low',
-                    output_format: 'png',
-                };
-
-                // Add input_fidelity if provided
-                if (input_fidelity) {
-                    editParams.input_fidelity = input_fidelity;
-                }
-
-                // Add mask if provided
-                if (maskFile) {
-                    editParams.mask = maskFile;
-                }
-
-                // Log the actual request being sent to OpenAI
-                const loggedRequestId = log_llm_request(
-                    agent.agent_id || 'default',
-                    'openai',
-                    model,
-                    { ...editParams, imageArray }, // Log the actual edit parameters
-                    new Date(),
-                    requestId,
-                    agent.tags
-                );
-                finalRequestId = loggedRequestId;
-
                 const result = await runOpenAIImageRequest({
                     operationName: `OpenAI image edit with ${model}`,
                     timeoutMs,
                     abortSignal: agent.abortSignal,
-                    execute: async signal =>
-                        await this.client.images.edit(editParams, requestOptions(signal)).withResponse(),
+                    execute: async signal => {
+                        const { editParams, imageArray } = await prepareOpenAIImageEditInput({
+                            model,
+                            prompt,
+                            sourceImages: source_images,
+                            mask: opts?.mask,
+                            numberOfImages: number_of_images,
+                            background,
+                            quality,
+                            size,
+                            inputFidelity: input_fidelity,
+                            signal,
+                        });
+                        finalRequestId = log_llm_request(
+                            agent.agent_id || 'default',
+                            'openai',
+                            model,
+                            { ...editParams, imageArray },
+                            new Date(),
+                            requestId,
+                            agent.tags
+                        );
+                        return await this.client.images.edit(editParams, requestOptions(signal)).withResponse();
+                    },
                 });
                 response = result.data;
                 providerRequestId = result.request_id || undefined;

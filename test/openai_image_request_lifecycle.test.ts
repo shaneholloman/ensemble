@@ -6,6 +6,7 @@ describe('OpenAI image request lifecycle', () => {
     afterEach(() => {
         vi.useRealTimers();
         vi.restoreAllMocks();
+        vi.unstubAllGlobals();
     });
 
     it('settles at the hard deadline even when the provider promise ignores abort', async () => {
@@ -104,6 +105,38 @@ describe('OpenAI image request lifecycle', () => {
         });
         expect(edit).toHaveBeenCalledTimes(1);
         expect(withResponse).toHaveBeenCalledTimes(1);
+    });
+
+    it('applies the hard deadline while a source image download is still preparing', async () => {
+        vi.useFakeTimers();
+        const provider = new OpenAIProvider('sk-test');
+        const edit = vi.fn();
+        (provider as any)._client = { images: { edit } };
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() => new Promise<never>(() => undefined))
+        );
+
+        const request = provider.createImage(
+            'Repair only the transparent pixels.',
+            'gpt-image-2',
+            { agent_id: 'test-openai-image-preparation-timeout' } as any,
+            {
+                source_images: ['https://example.com/non-settling.png'],
+                quality: 'low',
+                timeout_ms: 40_000,
+            }
+        );
+        const rejected = expect(request).rejects.toMatchObject({
+            reason: 'timeout',
+            retryable: true,
+            code: 'ETIMEDOUT',
+        });
+
+        await vi.advanceTimersByTimeAsync(40_000);
+
+        await rejected;
+        expect(edit).not.toHaveBeenCalled();
     });
 
     it('rejects a successful response with no image and retains its provider request id', async () => {

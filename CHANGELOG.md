@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Extended the OpenAI image deadline across source downloads, file preparation, request logging, and provider dispatch so preparation cannot strand an image edit before the guarded request begins.
 - Hardened OpenAI image generation and editing with an outer wall-clock deadline, abort propagation, disabled hidden SDK retries, stable idempotency controls, provider request-id metadata, and structured content-policy/error classification so non-settling requests and refusals are observable to callers.
 - Added FAL support for Seedream 5.0 Pro/Lite text-to-image (`bytedance/seedream/v5/pro`, `bytedance/seedream/v5/lite`) and Ideogram V4 instant/fast (`ideogram/v4/instant`, `ideogram/v4/fast`) with endpoint-specific routing and current pricing metadata.
 - Added xAI Grok 4.5 (`grok-4.5`) metadata, current aliases (`grok-4.5-latest`, `grok-build-latest`), class defaults, cached-token pricing, and Chat Completions `reasoning_effort` mapping.
