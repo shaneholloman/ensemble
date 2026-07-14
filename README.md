@@ -441,6 +441,25 @@ const grounded = await ensembleImage(
         },
     }
 );
+
+// OpenAI image edit with a hard deadline, stable idempotency, and request metadata
+const edited = await ensembleImage(
+    'Repair only the transparent pixels while preserving everything else.',
+    {
+        model: 'gpt-image-2',
+        abortSignal: conversionAbortController.signal,
+    },
+    {
+        source_images: [sourcePng],
+        mask: editableMaskPng,
+        quality: 'low',
+        timeout_ms: 40_000,
+        idempotency_key: conversionEffectId,
+        on_metadata: async metadata => {
+            await recordProviderRequestId(metadata.provider_request_id);
+        },
+    }
+);
 ```
 
 - ElevenLabs: `eleven_multilingual_v2`, `eleven_turbo_v2_5`

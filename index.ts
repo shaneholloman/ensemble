@@ -30,6 +30,15 @@ export {
     type OpenAICompatibleModelOptions,
 } from './model_providers/openai_compatible.js';
 
+export {
+    DEFAULT_OPENAI_IMAGE_TIMEOUT_MS,
+    OpenAIImageRequestError,
+    normalizeOpenAIImageError,
+    runOpenAIImageRequest,
+    type OpenAIImageErrorDetails,
+    type OpenAIImageFailureReason,
+} from './model_providers/openai_image_request.js';
+
 // Export all model data (excluding ModelClassID to avoid conflict)
 export { MODEL_REGISTRY, MODEL_CLASSES, findModel } from './data/model_data.js';
 

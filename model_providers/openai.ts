@@ -40,6 +40,11 @@ import {
     normalizeOpenAIImageQuality,
     normalizeOpenAIImageSize,
 } from './openai_image_pricing.js';
+import {
+    DEFAULT_OPENAI_IMAGE_TIMEOUT_MS,
+    OpenAIImageRequestError,
+    runOpenAIImageRequest,
+} from './openai_image_request.js';
 import { findModel } from '../data/model_data.js';
 import { buildEventsFromOpenAIResponse } from './openai_response_events.js';
 import type { ResponseCreateParamsStreaming } from 'openai/resources/responses/responses.js';
@@ -384,7 +389,21 @@ export class OpenAIProvider extends BaseModelProvider {
                 `[OpenAI] Generating ${number_of_images} image(s) with model ${model}, prompt: "${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}"`
             );
 
+            const configuredTimeoutMs = opts?.timeout_ms ?? agent.modelSettings?.timeout_ms;
+            const timeoutMs = configuredTimeoutMs ?? DEFAULT_OPENAI_IMAGE_TIMEOUT_MS;
+            if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+                throw new RangeError('OpenAI image timeout_ms must be a positive finite number.');
+            }
+            const idempotencyKey = opts?.idempotency_key ?? opts?.request_id;
+            const requestOptions = (signal: AbortSignal) => ({
+                signal,
+                timeout: timeoutMs,
+                maxRetries: 0,
+                ...(idempotencyKey ? { idempotencyKey } : {}),
+            });
+
             let response;
+            let providerRequestId: string | undefined;
 
             if (source_images) {
                 console.log('[OpenAI] Using images.edit with source_images');
@@ -507,7 +526,15 @@ export class OpenAIProvider extends BaseModelProvider {
                 );
                 finalRequestId = loggedRequestId;
 
-                response = await this.client.images.edit(editParams);
+                const result = await runOpenAIImageRequest({
+                    operationName: `OpenAI image edit with ${model}`,
+                    timeoutMs,
+                    abortSignal: agent.abortSignal,
+                    execute: async signal =>
+                        await this.client.images.edit(editParams, requestOptions(signal)).withResponse(),
+                });
+                response = result.data;
+                providerRequestId = result.request_id || undefined;
             } else {
                 // Use standard image generation
                 const generateParams = {
@@ -533,8 +560,23 @@ export class OpenAIProvider extends BaseModelProvider {
                 );
                 finalRequestId = loggedRequestId;
 
-                response = await this.client.images.generate(generateParams);
+                const result = await runOpenAIImageRequest({
+                    operationName: `OpenAI image generation with ${model}`,
+                    timeoutMs,
+                    abortSignal: agent.abortSignal,
+                    execute: async signal =>
+                        await this.client.images.generate(generateParams, requestOptions(signal)).withResponse(),
+                });
+                response = result.data;
+                providerRequestId = result.request_id || undefined;
             }
+
+            await opts?.on_metadata?.({
+                model,
+                provider: 'openai',
+                ...(providerRequestId ? { provider_request_id: providerRequestId } : {}),
+                ...(opts.request_id ? { request_id: opts.request_id } : {}),
+            });
 
             // Track usage for cost calculation. Prefer token usage returned by OpenAI;
             // otherwise use published or size-derived estimates.
@@ -576,17 +618,25 @@ export class OpenAIProvider extends BaseModelProvider {
             }
 
             // Extract the base64 image data for all images
+            if (!response.data || response.data.length === 0) {
+                throw new OpenAIImageRequestError('No images returned from OpenAI', {
+                    reason: 'empty_response',
+                    retryable: false,
+                    providerRequestId,
+                });
+            }
+
             const imageDataUrls = response.data.map(item => {
                 const imageData = item?.b64_json;
                 if (!imageData) {
-                    throw new Error('No image data returned from OpenAI');
+                    throw new OpenAIImageRequestError('No image data returned from OpenAI', {
+                        reason: 'empty_response',
+                        retryable: false,
+                        providerRequestId,
+                    });
                 }
                 return `data:image/png;base64,${imageData}`;
             });
-
-            if (imageDataUrls.length === 0) {
-                throw new Error('No images returned from OpenAI');
-            }
 
             // Log the actual response from OpenAI
             log_llm_response(finalRequestId, response);

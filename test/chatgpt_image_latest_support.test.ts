@@ -3,6 +3,10 @@ import { findModel } from '../data/model_data.js';
 import { OpenAIProvider } from '../model_providers/openai.js';
 import { costTracker } from '../utils/cost_tracker.js';
 
+const resolvedImageRequest = (data: unknown, requestId = 'req_openai_image_test') => ({
+    withResponse: vi.fn().mockResolvedValue({ data, request_id: requestId }),
+});
+
 describe('chatgpt-image-latest support', () => {
     beforeEach(() => {
         costTracker.reset();
@@ -28,9 +32,11 @@ describe('chatgpt-image-latest support', () => {
 
     it('passes chatgpt-image-latest directly to OpenAI image generation and tracks published pricing', async () => {
         const provider = new OpenAIProvider('sk-test');
-        const generate = vi.fn().mockResolvedValue({
-            data: [{ b64_json: 'YWJjMTIz' }],
-        });
+        const generate = vi.fn().mockReturnValue(
+            resolvedImageRequest({
+                data: [{ b64_json: 'YWJjMTIz' }],
+            })
+        );
 
         (provider as any)._client = {
             images: {
@@ -49,16 +55,23 @@ describe('chatgpt-image-latest support', () => {
         );
 
         expect(images).toEqual(['data:image/png;base64,YWJjMTIz']);
-        expect(generate).toHaveBeenCalledWith({
-            model: 'chatgpt-image-latest',
-            prompt: 'A bold editorial poster with sharp geometry',
-            n: 1,
-            background: 'auto',
-            quality: 'medium',
-            size: '1536x1024',
-            moderation: 'low',
-            output_format: 'png',
-        });
+        expect(generate).toHaveBeenCalledWith(
+            {
+                model: 'chatgpt-image-latest',
+                prompt: 'A bold editorial poster with sharp geometry',
+                n: 1,
+                background: 'auto',
+                quality: 'medium',
+                size: '1536x1024',
+                moderation: 'low',
+                output_format: 'png',
+            },
+            expect.objectContaining({
+                timeout: 300_000,
+                maxRetries: 0,
+                signal: expect.any(AbortSignal),
+            })
+        );
 
         const costsByModel = costTracker.getCostsByModel();
         expect(costsByModel['chatgpt-image-latest']?.cost).toBeCloseTo(0.05);

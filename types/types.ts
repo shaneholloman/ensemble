@@ -957,6 +957,12 @@ export interface ImageGenerationOpts {
     /** When true, return an async stream of ProviderStreamEvent instead of a final array */
     stream?: boolean;
 
+    /** Hard wall-clock timeout for one provider image request (default: 5 minutes) */
+    timeout_ms?: number;
+
+    /** Stable idempotency key for providers that support idempotent image requests */
+    idempotency_key?: string;
+
     // Provider-specific (BytePlus/Bytedance Seedream)
     /** BytePlus: random seed control (if supported by model) */
     seed?: number;
@@ -1024,7 +1030,7 @@ export interface ImageGenerationOpts {
      * Callback to receive provider metadata (grounding, thoughts, signatures, citations)
      * for image generation requests.
      */
-    on_metadata?: (metadata: ImageGenerationMetadata) => void;
+    on_metadata?: (metadata: ImageGenerationMetadata) => void | Promise<void>;
 }
 
 /**
@@ -1066,6 +1072,9 @@ export interface ImageThoughtPart {
  */
 export interface ImageGenerationMetadata {
     model?: string;
+    provider?: string;
+    provider_request_id?: string;
+    request_id?: string;
     grounding?: ImageGroundingMetadata;
     thoughts?: ImageThoughtPart[];
     thought_signatures?: string[];

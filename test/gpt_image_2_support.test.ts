@@ -4,6 +4,10 @@ import { OpenAIProvider } from '../model_providers/openai.js';
 import { normalizeOpenAIImageSize } from '../model_providers/openai_image_pricing.js';
 import { costTracker } from '../utils/cost_tracker.js';
 
+const resolvedImageRequest = (data: unknown, requestId = 'req_openai_image_test') => ({
+    withResponse: vi.fn().mockResolvedValue({ data, request_id: requestId }),
+});
+
 describe('gpt-image-2 support', () => {
     beforeEach(() => {
         costTracker.reset();
@@ -45,18 +49,20 @@ describe('gpt-image-2 support', () => {
 
     it('passes flexible gpt-image-2 sizes to OpenAI and tracks returned token usage', async () => {
         const provider = new OpenAIProvider('sk-test');
-        const generate = vi.fn().mockResolvedValue({
-            data: [{ b64_json: 'YWJjMTIz' }],
-            usage: {
-                input_tokens: 150,
-                input_tokens_details: {
-                    text_tokens: 100,
-                    image_tokens: 50,
+        const generate = vi.fn().mockReturnValue(
+            resolvedImageRequest({
+                data: [{ b64_json: 'YWJjMTIz' }],
+                usage: {
+                    input_tokens: 150,
+                    input_tokens_details: {
+                        text_tokens: 100,
+                        image_tokens: 50,
+                    },
+                    output_tokens: 5500,
+                    total_tokens: 5650,
                 },
-                output_tokens: 5500,
-                total_tokens: 5650,
-            },
-        });
+            })
+        );
 
         (provider as any)._client = {
             images: {
@@ -75,16 +81,23 @@ describe('gpt-image-2 support', () => {
         );
 
         expect(images).toEqual(['data:image/png;base64,YWJjMTIz']);
-        expect(generate).toHaveBeenCalledWith({
-            model: 'gpt-image-2',
-            prompt: 'A polished product render on a clean studio backdrop',
-            n: 1,
-            background: 'auto',
-            quality: 'high',
-            size: '2048x1152',
-            moderation: 'low',
-            output_format: 'png',
-        });
+        expect(generate).toHaveBeenCalledWith(
+            {
+                model: 'gpt-image-2',
+                prompt: 'A polished product render on a clean studio backdrop',
+                n: 1,
+                background: 'auto',
+                quality: 'high',
+                size: '2048x1152',
+                moderation: 'low',
+                output_format: 'png',
+            },
+            expect.objectContaining({
+                timeout: 300_000,
+                maxRetries: 0,
+                signal: expect.any(AbortSignal),
+            })
+        );
 
         const expectedCost = (100 / 1_000_000) * 5 + (50 / 1_000_000) * 8 + (5500 / 1_000_000) * 30;
         expect(costTracker.getTotalCost()).toBeCloseTo(expectedCost);
@@ -104,9 +117,11 @@ describe('gpt-image-2 support', () => {
     it('sends normalized aspect-ratio sizes for gpt-image-2 requests', async () => {
         const provider = new OpenAIProvider('sk-test');
         const addUsageSpy = vi.spyOn(costTracker, 'addUsage');
-        const generate = vi.fn().mockResolvedValue({
-            data: [{ b64_json: 'YWJjMTIz' }],
-        });
+        const generate = vi.fn().mockReturnValue(
+            resolvedImageRequest({
+                data: [{ b64_json: 'YWJjMTIz' }],
+            })
+        );
 
         (provider as any)._client = {
             images: {
@@ -129,6 +144,10 @@ describe('gpt-image-2 support', () => {
                 model: 'gpt-image-2',
                 quality: 'medium',
                 size: '1088x1456',
+            }),
+            expect.objectContaining({
+                timeout: 300_000,
+                maxRetries: 0,
             })
         );
         expect(costTracker.getCostsByModel()['gpt-image-2']?.cost).toBeCloseTo(0.050668);
@@ -148,9 +167,11 @@ describe('gpt-image-2 support', () => {
 
     it('uses documented common-size estimates when OpenAI does not return usage', async () => {
         const provider = new OpenAIProvider('sk-test');
-        const generate = vi.fn().mockResolvedValue({
-            data: [{ b64_json: 'YWJjMTIz' }],
-        });
+        const generate = vi.fn().mockReturnValue(
+            resolvedImageRequest({
+                data: [{ b64_json: 'YWJjMTIz' }],
+            })
+        );
 
         (provider as any)._client = {
             images: {
@@ -174,9 +195,11 @@ describe('gpt-image-2 support', () => {
     it('estimates gpt-image-2 pricing for custom sizes when OpenAI does not return usage', async () => {
         const provider = new OpenAIProvider('sk-test');
         const addUsageSpy = vi.spyOn(costTracker, 'addUsage');
-        const generate = vi.fn().mockResolvedValue({
-            data: [{ b64_json: 'YWJjMTIz' }],
-        });
+        const generate = vi.fn().mockReturnValue(
+            resolvedImageRequest({
+                data: [{ b64_json: 'YWJjMTIz' }],
+            })
+        );
 
         (provider as any)._client = {
             images: {

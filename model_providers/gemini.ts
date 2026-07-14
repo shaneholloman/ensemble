@@ -2187,7 +2187,7 @@ export class GeminiProvider extends BaseModelProvider {
                 }
 
                 if (opts?.on_metadata) {
-                    opts.on_metadata(aggregateMetadata);
+                    await opts.on_metadata(aggregateMetadata);
                 }
 
                 if (allImages.length === 0) {
