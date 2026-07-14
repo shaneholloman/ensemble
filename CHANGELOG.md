@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- Sent OpenAI image idempotency keys as an explicit wire header, added a redacted live image-edit trace, and retained upload filenames, media types, and byte counts in request logs without storing raw image payloads.
+- Refreshed runtime and development dependencies to current compatible releases, including OpenAI 6.46, Anthropic 0.111, Google GenAI 2.11, Vitest 4.1.10, and ESLint 10.7; TypeScript remains on the latest TypeDoc-compatible 6.x release.
 - Extended the OpenAI image deadline across source downloads, file preparation, request logging, and provider dispatch so preparation cannot strand an image edit before the guarded request begins.
 - Hardened OpenAI image generation and editing with an outer wall-clock deadline, abort propagation, disabled hidden SDK retries, stable idempotency controls, provider request-id metadata, and structured content-policy/error classification so non-settling requests and refusals are observable to callers.
 - Added FAL support for Seedream 5.0 Pro/Lite text-to-image (`bytedance/seedream/v5/pro`, `bytedance/seedream/v5/lite`) and Ideogram V4 instant/fast (`ideogram/v4/instant`, `ideogram/v4/fast`) with endpoint-specific routing and current pricing metadata.

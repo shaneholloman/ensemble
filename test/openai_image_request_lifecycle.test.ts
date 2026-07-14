@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OpenAIProvider } from '../model_providers/openai.js';
 import { normalizeOpenAIImageError, runOpenAIImageRequest } from '../model_providers/openai_image_request.js';
+import { setEnsembleLogger } from '../utils/llm_logger.js';
 
 describe('OpenAI image request lifecycle', () => {
     afterEach(() => {
         vi.useRealTimers();
         vi.restoreAllMocks();
         vi.unstubAllGlobals();
+        setEnsembleLogger(null);
     });
 
     it('settles at the hard deadline even when the provider promise ignores abort', async () => {
@@ -167,6 +169,8 @@ describe('OpenAI image request lifecycle', () => {
     it('passes timeout, abort, and idempotency controls to the SDK and exposes the provider request id', async () => {
         const provider = new OpenAIProvider('sk-test');
         const onMetadata = vi.fn();
+        const logRequest = vi.fn(() => 'logged-request-123');
+        setEnsembleLogger({ log_llm_request: logRequest } as any);
         const withResponse = vi.fn().mockResolvedValue({
             data: { data: [{ b64_json: 'YWJjMTIz' }] },
             request_id: 'req_provider_123',
@@ -200,6 +204,7 @@ describe('OpenAI image request lifecycle', () => {
                 timeout: 40_000,
                 maxRetries: 0,
                 idempotencyKey: 'stable-dispatch-123',
+                headers: { 'Idempotency-Key': 'stable-dispatch-123' },
                 signal: expect.any(AbortSignal),
             })
         );
@@ -210,5 +215,24 @@ describe('OpenAI image request lifecycle', () => {
             provider_request_id: 'req_provider_123',
             request_id: 'conversion-effect-123',
         });
+        expect(logRequest).toHaveBeenCalledWith(
+            'test-openai-image-lifecycle',
+            'openai',
+            'gpt-image-2',
+            expect.objectContaining({
+                source_images: [
+                    expect.objectContaining({
+                        filename: 'image_0.png',
+                        content_type: 'image/png',
+                        byte_count: 6,
+                    }),
+                ],
+                mask: expect.objectContaining({ byte_count: 6 }),
+            }),
+            expect.any(Date),
+            expect.any(String),
+            undefined
+        );
+        expect(JSON.stringify(logRequest.mock.calls[0]?.[3])).not.toContain('YWJjMTIz');
     });
 });

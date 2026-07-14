@@ -400,7 +400,12 @@ export class OpenAIProvider extends BaseModelProvider {
                 signal,
                 timeout: timeoutMs,
                 maxRetries: 0,
-                ...(idempotencyKey ? { idempotencyKey } : {}),
+                ...(idempotencyKey
+                    ? {
+                          idempotencyKey,
+                          headers: { 'Idempotency-Key': idempotencyKey },
+                      }
+                    : {}),
             });
 
             let response;
@@ -414,7 +419,7 @@ export class OpenAIProvider extends BaseModelProvider {
                     timeoutMs,
                     abortSignal: agent.abortSignal,
                     execute: async signal => {
-                        const { editParams, imageArray } = await prepareOpenAIImageEditInput({
+                        const { editParams, requestLogData } = await prepareOpenAIImageEditInput({
                             model,
                             prompt,
                             sourceImages: source_images,
@@ -430,7 +435,7 @@ export class OpenAIProvider extends BaseModelProvider {
                             agent.agent_id || 'default',
                             'openai',
                             model,
-                            { ...editParams, imageArray },
+                            requestLogData,
                             new Date(),
                             requestId,
                             agent.tags

@@ -88,5 +88,23 @@ export const prepareOpenAIImageEditInput = async (args: PrepareOpenAIImageEditIn
         ...(args.inputFidelity ? { input_fidelity: args.inputFidelity } : {}),
         ...(maskFile ? { mask: maskFile } : {}),
     };
-    return { imageArray, editParams };
+    const uploadMetadata = (file: File) => ({
+        filename: file.name,
+        content_type: file.type,
+        byte_count: file.size,
+    });
+    const requestLogData = {
+        model: args.model,
+        prompt: args.prompt,
+        n: args.numberOfImages,
+        background: args.background,
+        quality: args.quality,
+        size: args.size,
+        moderation: 'low',
+        output_format: 'png',
+        ...(args.inputFidelity ? { input_fidelity: args.inputFidelity } : {}),
+        source_images: imageFiles.map(uploadMetadata),
+        ...(maskFile ? { mask: uploadMetadata(maskFile) } : {}),
+    };
+    return { editParams, requestLogData };
 };
